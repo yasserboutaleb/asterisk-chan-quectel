@@ -1,5 +1,10 @@
 # Asterisk channel driver for *Quectel* and *SimCOM* modules
 
+> **About this fork.** [RoEdAl/asterisk-chan-quectel](//github.com/RoEdAl/asterisk-chan-quectel) is archived.
+> This fork adds options to run the driver on a module that is shared with another program
+> (for example the modem manager of a cellular router): `sms`, `shared_cfg`, `urc_cfg` and `clcc_poll`.
+> All of them default to the original behavior. See [Configuration](#configuration) below.
+
 See original [README](//github.com/IchthysMaranatha/asterisk-chan-quectel/blob/master/README.md) of this project.
 
 ----
@@ -7,6 +12,7 @@ See original [README](//github.com/IchthysMaranatha/asterisk-chan-quectel/blob/m
 Supported modules:
 
 * Quectel *EC25-E*,
+* Quectel *EG06-E* (shared with another program, see the `sms`, `shared_cfg`, `urc_cfg` and `clcc_poll` options),
 * SimCOM *SIM7600G-H*,
 * SimCOM *SIM900* (analog input/output, see [here](//github.com/RoEdAl/asterisk-chan-quectel/wiki/Using-SIM900-board-with-analog-input-and-output) for more details),
 * SimCOM *SIM800C* (analog input/output),
