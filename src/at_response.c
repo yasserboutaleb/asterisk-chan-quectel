@@ -145,6 +145,7 @@ static void request_clcc(struct pvt* pvt)
 }
 
 static int at_response_cmgs_error(struct pvt*, const at_queue_task_t* const);
+static void clcc_poll_sweep(struct pvt* const pvt);
 
 static void __attribute__((format(printf, 7, 8))) at_ok_response_log(int level, const char* file, int line, const char* function, const struct pvt* const pvt,
                                                                      const at_queue_cmd_t* const ecmd, const char* const fmt, ...)
@@ -192,6 +193,10 @@ static int at_response_ok(struct pvt* const pvt, const at_res_t at_res, const at
     if (ecmd->res != at_res) {
         at_ok_response_wrn(pvt, ecmd, "Received unexpected [%s], ignoring", at_res2str(at_res));
         return 0;
+    }
+
+    if (ecmd->cmd == CMD_AT_CLCC && CONF_SHARED(pvt, clcc_poll) > 0) {
+        clcc_poll_sweep(pvt);
     }
 
     switch (ecmd->cmd) {
@@ -1143,8 +1148,11 @@ static int at_response_clcc(struct pvt* const pvt, const struct ast_str* const r
     }
 
     struct cpvt* cpvt;
-    AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
-        CPVT_RESET_FLAG(cpvt, CALL_FLAG_ALIVE);
+    if (!CONF_SHARED(pvt, clcc_poll)) {
+        /* with clcc_poll, ALIVE flags are cleared by clcc_poll_sweep() after each final OK */
+        AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
+            CPVT_RESET_FLAG(cpvt, CALL_FLAG_ALIVE);
+        }
     }
 
     RAII_VAR(struct ast_str*, line, ast_str_create(LINE_DEF_LEN), ast_free);
@@ -1173,6 +1181,67 @@ static int at_response_clcc(struct pvt* const pvt, const struct ast_str* const r
     }
 
     return 0;
+}
+
+/*
+ * clcc_poll: without call state URCs nothing signals a call end, so a call that
+ * is no longer listed by AT+CLCC is released here. Called on the final OK of every
+ * AT+CLCC (also when the list is empty, which produces no +CLCC line at all).
+ * Two consecutive misses are required for a known call (avoids races with ATD/ATA);
+ * an outgoing call that never appeared (CALL_STATE_INIT without index) is released
+ * after 5 polls. ALIVE flags are cleared afterwards for the next poll.
+ */
+static void clcc_poll_sweep(struct pvt* const pvt)
+{
+    struct cpvt* cpvt;
+
+    if (!pvt->initialized) {
+        return;
+    }
+
+    {
+        static const unsigned int MISS_KNOWN = 2u;
+        static const unsigned int MISS_INIT  = 5u;
+
+        struct {
+            unsigned int idx;
+            unsigned int dir;
+        } gone[MAX_CALL_IDX + 1];
+        unsigned int ngone = 0u;
+
+        AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
+            if (CPVT_TEST_FLAG(cpvt, CALL_FLAG_ALIVE) || cpvt->state == CALL_STATE_RELEASED) {
+                cpvt->clcc_miss = 0u;
+                continue;
+            }
+
+            ++cpvt->clcc_miss;
+
+            if (cpvt->state == CALL_STATE_INIT && cpvt->call_idx <= MIN_CALL_IDX) {
+                if (cpvt->clcc_miss >= MISS_INIT) {
+                    ast_log(LOG_WARNING, "[%s] CLCC poll - outgoing call never listed, releasing\n", PVT_ID(pvt));
+                    cpvt_change_state(cpvt, CALL_STATE_RELEASED, AST_CAUSE_NORMAL_TEMPORARY_FAILURE);
+                    break; /* list may have changed, next poll continues */
+                }
+                continue;
+            }
+
+            if (cpvt->clcc_miss >= MISS_KNOWN && ngone < ARRAY_LEN(gone)) {
+                gone[ngone].idx = (unsigned int)cpvt->call_idx;
+                gone[ngone].dir = CPVT_DIRECTION(cpvt);
+                ++ngone;
+            }
+        }
+
+        for (unsigned int i = 0u; i < ngone; ++i) {
+            ast_debug(3, "[%s] CLCC poll - call idx:%u no longer listed, released\n", PVT_ID(pvt), gone[i].idx);
+            handle_clcc(pvt, gone[i].idx, gone[i].dir, CALL_STATE_RELEASED, CLCC_CALL_TYPE_VOICE, TRIBOOL_NONE, "", 0u);
+        }
+    }
+
+    AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
+        CPVT_RESET_FLAG(cpvt, CALL_FLAG_ALIVE);
+    }
 }
 
 static unsigned int map_dsci(const unsigned int dsci)

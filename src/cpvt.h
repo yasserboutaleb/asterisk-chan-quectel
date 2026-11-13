@@ -66,6 +66,8 @@ typedef struct cpvt {
     call_state_t state; /*!< see also call_state_t */
     unsigned int flags; /*!< see also call_flag_t */
 
+    unsigned int clcc_miss; /*!< clcc_poll: consecutive AT+CLCC polls not listing this call */
+
     int rd_pipe[2]; /*!< pipe for split read from device */
 #define PIPE_READ 0
 #define PIPE_WRITE 1

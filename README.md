@@ -216,6 +216,18 @@ Supported modules:
     | **on** | the driver sets the module-global settings it needs |
     | off | the driver leaves them untouched: `AT+CSCS`, `AT+CMEE`, `AT+CSSN`, `AT+VTD`, `AT+COPS` (format), `AT+CREG`, `AT+CEREG` and `AT+QTONEDET` are not sent. Network names are then read as plain text (character set left as set by the other program, usually `GSM`) |
 
+* New `urc_cfg` option (**on**/off) and `clcc_poll` option (**0**, or 250-10000 ms).
+
+    By default the driver learns call states from `+QIND: "ccinfo"` (or `^DSCI`) notifications.
+    On some devices another program owns the module's URC port (`AT+QURCCFG="urcport"`), so these notifications never reach the driver's AT port.
+
+    | option | description |
+    | :----: | ----------- |
+    | `urc_cfg=off` | do not send the module-global URC settings (`AT+QINDCFG="ccinfo"`, `"csq"`, `"act"`, `"ring"`, `AT^DSCI`), keep the other program's values |
+    | `clcc_poll=N` | poll call states with `AT+CLCC` every *N* ms (clamped to 250-10000) while the command queue is idle; a call no longer listed by two consecutive polls is released, an outgoing call never listed is released after five polls. Replaces the idle `AT` *ping* |
+
+    Typical values when the module is shared: `urc_cfg=off` and `clcc_poll=1000`.
+
 * Removed `disablesms` option.
 * `smsdb` option in `[general]` section defaulted to `:memory:`
 

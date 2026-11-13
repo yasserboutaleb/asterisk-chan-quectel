@@ -188,7 +188,8 @@ static void monitor_threadproc_pvt(struct pvt* const pvt)
     }
 
     /* 4 reduce locking time make copy of this readonly fields */
-    const int fd = pvt->data_fd;
+    const int fd        = pvt->data_fd;
+    const int clcc_poll = CONF_SHARED(pvt, clcc_poll); /* AT+CLCC polling period in ms, 0 = off */
     at_clean_data(dev, fd, &rb);
 
     /* schedule initilization  */
@@ -199,16 +200,25 @@ static void monitor_threadproc_pvt(struct pvt* const pvt)
 
     ast_mutex_unlock(&pvt->lock);
 
-    int read_result = 0;
+    int read_result           = 0;
+    struct timeval last_poll  = ast_tvnow();
+    const int idle_timeout    = clcc_poll > 0 ? clcc_poll : RESPONSE_READ_TIMEOUT;
     while (1) {
+        if (clcc_poll > 0 && ast_tvdiff_ms(ast_tvnow(), last_poll) >= clcc_poll) {
+            last_poll = ast_tvnow();
+            if (ast_taskprocessor_push(tps, at_enqueue_clcc_poll_taskproc, pvt)) {
+                ast_debug(5, "[%s] Unable to push CLCC poll\n", dev);
+            }
+        }
+
         if (ast_taskprocessor_push(tps, handle_expired_reports_taskproc, pvt)) {
             ast_debug(5, "[%s] Unable to handle exprired reports\n", dev);
         }
 
         if (ast_mutex_trylock(&pvt->lock)) {  // pvt unlocked
-            int t = RESPONSE_READ_TIMEOUT;
+            int t = idle_timeout;
             if (!at_wait(fd, &t)) {
-                if (ast_taskprocessor_push(tps, at_enqueue_ping_taskproc, pvt)) {
+                if (!clcc_poll && ast_taskprocessor_push(tps, at_enqueue_ping_taskproc, pvt)) {
                     ast_debug(5, "[%s] Unable to handle timeout\n", dev);
                 }
                 continue;
@@ -247,14 +257,29 @@ static void monitor_threadproc_pvt(struct pvt* const pvt)
                     if (!at_wait(fd, &t)) {
                         continue;
                     }
-                } else if (!at_wait(fd, &t)) {
-                    if (ast_taskprocessor_push(tps, cmd_timeout_taskproc, pvt)) {
-                        ast_debug(5, "[%s] Unable to handle timeout\n", dev);
+                } else {
+                    /*
+                     * With clcc_poll, never sleep longer than the poll period. The head
+                     * command may already be answered (its response is still in the taskprocessor),
+                     * so waiting for its full timeout would stall polling. When the capped wait
+                     * expires before the real deadline, just loop: the deadline is re-evaluated.
+                     */
+                    const int capped = clcc_poll > 0 && t > clcc_poll;
+                    if (capped) {
+                        t = clcc_poll;
                     }
-                    continue;
+                    if (!at_wait(fd, &t)) {
+                        if (capped) {
+                            continue;
+                        }
+                        if (ast_taskprocessor_push(tps, cmd_timeout_taskproc, pvt)) {
+                            ast_debug(5, "[%s] Unable to handle timeout\n", dev);
+                        }
+                        continue;
+                    }
                 }
             } else {
-                t = RESPONSE_READ_TIMEOUT;
+                t = idle_timeout;
                 if (!at_wait(fd, &t)) {
                     if (check_taskprocessor(tps, dev)) {
                         if (ast_taskprocessor_push(tps, restart_monitor_taskproc, pvt)) {
@@ -262,7 +287,7 @@ static void monitor_threadproc_pvt(struct pvt* const pvt)
                         }
                     }
 
-                    if (ast_taskprocessor_push(tps, at_enqueue_ping_taskproc, pvt)) {
+                    if (!clcc_poll && ast_taskprocessor_push(tps, at_enqueue_ping_taskproc, pvt)) {
                         ast_debug(5, "[%s] Unable to handle timeout\n", dev);
                     }
                     continue;

@@ -373,16 +373,33 @@ int at_enqueue_initialization_quectel(struct cpvt* cpvt, unsigned int dsci)
         ATQ_CMD_DECLARE_ST(CMD_AT_FINAL, at),
     };
 
-    if (!CONF_SHARED(pvt, shared_cfg)) {
-        /* shared_cfg=off: +QTONEDET and +CEREG settings are global to the module, leave them untouched */
+    if (!CONF_SHARED(pvt, urc_cfg) || !CONF_SHARED(pvt, shared_cfg)) {
+        /*
+         * +QINDCFG / ^DSCI (urc_cfg=off) and +QTONEDET / +CEREG (shared_cfg=off) are global to the
+         * module: leave them untouched. With urc_cfg=off, call states come from AT+CLCC polling (clcc_poll).
+         */
         at_queue_cmd_t filtered[ARRAY_LEN(cmds)];
         unsigned out = 0;
         for (unsigned in = 0; in < ARRAY_LEN(cmds); ++in) {
             switch (cmds[in].cmd) {
+                case CMD_AT_QINDCFG_CC:
+                case CMD_AT_QINDCFG_CC_OFF:
+                case CMD_AT_DSCI:
+                case CMD_AT_DSCI_OFF:
+                case CMD_AT_QINDCFG_CSQ:
+                case CMD_AT_QINDCFG_ACT:
+                case CMD_AT_QINDCFG_RING:
+                    if (!CONF_SHARED(pvt, urc_cfg)) {
+                        continue;
+                    }
+                    break;
                 case CMD_AT_QTONEDET_0:
                 case CMD_AT_QTONEDET_1:
                 case CMD_AT_CEREG_INIT:
-                    continue;
+                    if (!CONF_SHARED(pvt, shared_cfg)) {
+                        continue;
+                    }
+                    break;
                 default:
                     break;
             }
@@ -1013,6 +1030,28 @@ int at_enqueue_ping(struct cpvt* cpvt)
 static void at_enqueue_ping_sys_chan(struct pvt* pvt) { at_enqueue_ping(&pvt->sys_chan); }
 
 int at_enqueue_ping_taskproc(void* tpdata) { return PVT_TASKPROC_TRYLOCK_AND_EXECUTE(tpdata, at_enqueue_ping_sys_chan); }
+
+/*
+ * clcc_poll: periodic AT+CLCC, used when call state URCs (+QIND "ccinfo", ^DSCI) are routed to
+ * another port of the module (AT+QURCCFG="urcport") and never reach the driver.
+ * Only queued when the device is initialized and the command queue is idle, so polls never
+ * pile up behind real commands.
+ */
+static void at_enqueue_clcc_poll_sys_chan(struct pvt* pvt)
+{
+    DECLARE_AT_CMD(clcc, "+CLCC");
+    static const at_queue_cmd_t cmd = ATQ_CMD_DECLARE_ST(CMD_AT_CLCC, clcc);
+
+    if (!pvt->initialized || at_queue_head_cmd(pvt)) {
+        return;
+    }
+
+    if (at_queue_insert_const(&pvt->sys_chan, &cmd, 1u, 0)) {
+        ast_log(LOG_ERROR, "[%s] Error enqueue CLCC poll\n", PVT_ID(pvt));
+    }
+}
+
+int at_enqueue_clcc_poll_taskproc(void* tpdata) { return PVT_TASKPROC_TRYLOCK_AND_EXECUTE(tpdata, at_enqueue_clcc_poll_sys_chan); }
 
 /*!
  * \brief Enqueue user-specified command

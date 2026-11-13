@@ -198,7 +198,9 @@ void dc_sconfig_fill_defaults(struct dc_sconfig* config)
     config->dtmf_duration = DEF_DTMF_DURATION;
     config->qhup          = 1u;
     config->sms           = 1u;
+    config->urc_cfg       = 1u;
     config->shared_cfg    = 1u;
+    config->clcc_poll     = 0;
 }
 
 #/* */
@@ -273,8 +275,14 @@ void dc_sconfig_fill(struct ast_config* cfg, const char* cat, struct dc_sconfig*
             config->qhup = parse_on_off(v->name, v->value, 1u);
         } else if (!strcasecmp(v->name, "sms")) {
             config->sms = parse_on_off(v->name, v->value, 1u);
+        } else if (!strcasecmp(v->name, "urc_cfg")) {
+            config->urc_cfg = parse_on_off(v->name, v->value, 1u);
         } else if (!strcasecmp(v->name, "shared_cfg")) {
             config->shared_cfg = parse_on_off(v->name, v->value, 1u);
+        } else if (!strcasecmp(v->name, "clcc_poll")) {
+            const long poll = strtol(v->value, (char**)NULL, 10);
+            /* 0 disables polling; otherwise clamp to a sane range (250 ms .. 10 s) */
+            config->clcc_poll = poll <= 0 ? 0 : (poll < 250 ? 250 : (poll > 10000 ? 10000 : (int)poll));
         } else if (!strcasecmp(v->name, "msg_direct")) {
             config->msg_direct = dc_str23stbool(v->value);
         } else if (!strcasecmp(v->name, "msg_storage")) {
@@ -352,7 +360,7 @@ static int dc_sconfig_compare(const struct dc_sconfig* const cfg1, const struct 
            cfg1->multiparty != cfg2->multiparty || cfg1->dtmf != cfg2->dtmf || cfg1->moh != cfg2->moh || cfg1->query_time != cfg2->query_time ||
            cfg1->dsci != cfg2->dsci || cfg1->qhup != cfg2->qhup || cfg1->dtmf_duration != cfg2->dtmf_duration || cfg1->init_state != cfg2->init_state ||
            cfg1->call_waiting != cfg2->call_waiting || cfg1->msg_service != cfg2->msg_service || cfg1->msg_direct != cfg2->msg_direct ||
-           cfg1->msg_storage != cfg2->msg_storage || cfg1->sms != cfg2->sms || cfg1->shared_cfg != cfg2->shared_cfg;
+           cfg1->msg_storage != cfg2->msg_storage || cfg1->sms != cfg2->sms || cfg1->urc_cfg != cfg2->urc_cfg || cfg1->shared_cfg != cfg2->shared_cfg || cfg1->clcc_poll != cfg2->clcc_poll;
 }
 
 static int dc_uconfig_compare(const struct dc_uconfig* const cfg1, const struct dc_uconfig* const cfg2)
