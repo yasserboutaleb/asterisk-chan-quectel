@@ -67,6 +67,7 @@ typedef struct dc_sconfig {
     unsigned int dsci            :1; /*!< use ^DSCI call state notifications */
     unsigned int qhup            :1; /*!< use QHUP command */
     unsigned int sms             :1; /*!< handle SMS in the driver (1) or leave them to another program sharing the module (0) */
+    unsigned int shared_cfg      :1; /*!< set module-global settings (1) or leave them to another program sharing the module (0) */
 
     long dtmf_duration;          /*! duration of DTMF in miliseconds */
     dev_state_t init_state;      /*! DEV_STATE_STARTED */

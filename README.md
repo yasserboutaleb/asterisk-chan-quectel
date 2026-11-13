@@ -206,6 +206,16 @@ Supported modules:
     | **on** | the driver configures, receives and deletes SMS |
     | off | SMS are left to another program sharing the module (for example the router's own SMS daemon): the driver does not change the SMS format, storage or indications (`AT+CMGF`, `AT+CSCA`, `AT+CNMI`, `AT+CPMS`, `AT+CSMS`) and ignores `+CMTI`/`+CDSI`, so it never reads or deletes a message |
 
+* New `shared_cfg` option (**on**/off).
+
+    Some module settings are global: a change made on one AT port is also seen on the other ports.
+    When another program shares the module (for example the modem manager of a cellular router), it may rely on its own values.
+
+    | value | description |
+    | :---: | ----------- |
+    | **on** | the driver sets the module-global settings it needs |
+    | off | the driver leaves them untouched: `AT+CSCS`, `AT+CMEE`, `AT+CSSN`, `AT+VTD`, `AT+COPS` (format), `AT+CREG`, `AT+CEREG` and `AT+QTONEDET` are not sent. Network names are then read as plain text (character set left as set by the other program, usually `GSM`) |
+
 * Removed `disablesms` option.
 * `smsdb` option in `[general]` section defaulted to `:memory:`
 

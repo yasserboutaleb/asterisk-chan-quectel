@@ -205,6 +205,24 @@ int at_enqueue_initialization(struct cpvt* cpvt)
             continue;
         }
 
+        /*
+         * shared_cfg=off: these settings are global to the module (a change made on one AT port
+         * is seen on the others), keep the values chosen by the other program sharing the module
+         */
+        if (!CONF_SHARED(pvt, shared_cfg)) {
+            switch (st_cmds[in].cmd) {
+                case CMD_AT_CSCS:
+                case CMD_AT_CMEE:
+                case CMD_AT_CSSN:
+                case CMD_AT_VTD:
+                case CMD_AT_COPS_INIT:
+                case CMD_AT_CREG_INIT:
+                    continue;
+                default:
+                    break;
+            }
+        }
+
         /* sms=off: SMS belong to another program sharing the module, keep its format, storage and indications */
         if (!CONF_SHARED(pvt, sms)) {
             switch (st_cmds[in].cmd) {
@@ -354,6 +372,24 @@ int at_enqueue_initialization_quectel(struct cpvt* cpvt, unsigned int dsci)
         ATQ_CMD_DECLARE_ST(CMD_AT_CEREG_INIT, cereg_init),
         ATQ_CMD_DECLARE_ST(CMD_AT_FINAL, at),
     };
+
+    if (!CONF_SHARED(pvt, shared_cfg)) {
+        /* shared_cfg=off: +QTONEDET and +CEREG settings are global to the module, leave them untouched */
+        at_queue_cmd_t filtered[ARRAY_LEN(cmds)];
+        unsigned out = 0;
+        for (unsigned in = 0; in < ARRAY_LEN(cmds); ++in) {
+            switch (cmds[in].cmd) {
+                case CMD_AT_QTONEDET_0:
+                case CMD_AT_QTONEDET_1:
+                case CMD_AT_CEREG_INIT:
+                    continue;
+                default:
+                    break;
+            }
+            filtered[out++] = cmds[in];
+        }
+        return at_queue_insert_const(cpvt, filtered, out, 0);
+    }
 
     return at_queue_insert_const(cpvt, cmds, ARRAY_LEN(cmds), 0);
 }

@@ -2647,6 +2647,15 @@ static int at_response_psnwid(struct pvt* const pvt, const struct ast_str* const
     }
 
     char utf8_str[50];
+    if (!CONF_SHARED(pvt, shared_cfg)) {
+        /* shared_cfg=off: AT+CSCS is left to the other program (usually "GSM"), names are plain text */
+        ast_string_field_set(pvt, network_name, fnn);
+        ast_string_field_set(pvt, short_network_name, snn);
+        pvt->operator= mcc * 100 + mnc;
+        ast_verb(1, "[%s] Operator: %s/%s\n", PVT_ID(pvt), pvt->network_name, pvt->short_network_name);
+        return 0;
+    }
+
     if (from_ucs2(fnn, utf8_str, STRLEN(utf8_str))) {
         ast_log(LOG_ERROR, "[%s] Error decoding full network name: %s\n", PVT_ID(pvt), fnn);
         return -1;
