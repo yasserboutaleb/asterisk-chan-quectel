@@ -197,6 +197,7 @@ void dc_sconfig_fill_defaults(struct dc_sconfig* config)
     config->msg_service   = -1;
     config->dtmf_duration = DEF_DTMF_DURATION;
     config->qhup          = 1u;
+    config->sms           = 1u;
 }
 
 #/* */
@@ -269,6 +270,8 @@ void dc_sconfig_fill(struct ast_config* cfg, const char* cat, struct dc_sconfig*
             config->dsci = parse_on_off(v->name, v->value, 0u);
         } else if (!strcasecmp(v->name, "qhup")) {
             config->qhup = parse_on_off(v->name, v->value, 1u);
+        } else if (!strcasecmp(v->name, "sms")) {
+            config->sms = parse_on_off(v->name, v->value, 1u);
         } else if (!strcasecmp(v->name, "msg_direct")) {
             config->msg_direct = dc_str23stbool(v->value);
         } else if (!strcasecmp(v->name, "msg_storage")) {
@@ -346,7 +349,7 @@ static int dc_sconfig_compare(const struct dc_sconfig* const cfg1, const struct 
            cfg1->multiparty != cfg2->multiparty || cfg1->dtmf != cfg2->dtmf || cfg1->moh != cfg2->moh || cfg1->query_time != cfg2->query_time ||
            cfg1->dsci != cfg2->dsci || cfg1->qhup != cfg2->qhup || cfg1->dtmf_duration != cfg2->dtmf_duration || cfg1->init_state != cfg2->init_state ||
            cfg1->call_waiting != cfg2->call_waiting || cfg1->msg_service != cfg2->msg_service || cfg1->msg_direct != cfg2->msg_direct ||
-           cfg1->msg_storage != cfg2->msg_storage;
+           cfg1->msg_storage != cfg2->msg_storage || cfg1->sms != cfg2->sms;
 }
 
 static int dc_uconfig_compare(const struct dc_uconfig* const cfg1, const struct dc_uconfig* const cfg2)

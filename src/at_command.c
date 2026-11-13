@@ -205,6 +205,20 @@ int at_enqueue_initialization(struct cpvt* cpvt)
             continue;
         }
 
+        /* sms=off: SMS belong to another program sharing the module, keep its format, storage and indications */
+        if (!CONF_SHARED(pvt, sms)) {
+            switch (st_cmds[in].cmd) {
+                case CMD_AT_CMGF:
+                case CMD_AT_CSCA:
+                case CMD_AT_CNMI:
+                case CMD_AT_CPMS:
+                case CMD_AT_CSMS:
+                    continue;
+                default:
+                    break;
+            }
+        }
+
         if (!(st_cmds[in].flags & ATQ_CMD_FLAG_STATIC)) {
             dyn_cmd     = st_cmds[in];
             dyn_handled = 0;

@@ -1490,6 +1490,12 @@ static int at_response_cmti(struct pvt* const pvt, const struct ast_str* const r
 {
     int idx;
 
+    if (!CONF_SHARED(pvt, sms)) {
+        /* sms=off: another program reads and deletes the messages */
+        ast_debug(2, "[%s] SMS handling disabled (sms=off), ignoring '%s'\n", PVT_ID(pvt), ast_str_buffer(response));
+        return 0;
+    }
+
     if (at_parse_cmti(ast_str_buffer(response), &idx)) {
         ast_log(LOG_WARNING, "[%s] Error parsing incoming message alert '%s', ignoring\n", PVT_ID(pvt), ast_str_buffer(response));
         return -1;
@@ -1521,6 +1527,11 @@ static int at_response_cmti(struct pvt* const pvt, const struct ast_str* const r
 static int at_response_cdsi(struct pvt* const pvt, const struct ast_str* const response)
 {
     int idx;
+
+    if (!CONF_SHARED(pvt, sms)) {
+        ast_debug(2, "[%s] SMS handling disabled (sms=off), ignoring '%s'\n", PVT_ID(pvt), ast_str_buffer(response));
+        return 0;
+    }
 
     if (at_parse_cdsi(ast_str_buffer(response), &idx)) {
         ast_log(LOG_WARNING, "[%s] Error parsing incoming message alert '%s', ignoring\n", PVT_ID(pvt), ast_str_buffer(response));

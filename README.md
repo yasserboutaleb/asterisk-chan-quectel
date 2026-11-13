@@ -199,6 +199,13 @@ Supported modules:
    For *Quectel* modules `ccinfo` (`AT+QINDCFG="ccinfo"` command) notifications are used by default.
    You can switch back to (less efficient) `dsci` (`AT^DSCI` command) notifications if your module does not support `ccinfo` notifications.
 
+* New `sms` option (**on**/off).
+
+    | value | description |
+    | :---: | ----------- |
+    | **on** | the driver configures, receives and deletes SMS |
+    | off | SMS are left to another program sharing the module (for example the router's own SMS daemon): the driver does not change the SMS format, storage or indications (`AT+CMGF`, `AT+CSCA`, `AT+CNMI`, `AT+CPMS`, `AT+CSMS`) and ignores `+CMTI`/`+CDSI`, so it never reads or deletes a message |
+
 * Removed `disablesms` option.
 * `smsdb` option in `[general]` section defaulted to `:memory:`
 
