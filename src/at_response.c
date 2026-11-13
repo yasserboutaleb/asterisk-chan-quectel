@@ -60,6 +60,8 @@ static const at_response_t at_responses_list[] = {
 #define DEF_STR(str) str, STRLEN(str)
     {RES_CNUM,  "+CNUM", DEF_STR("ERROR+CNUM:")          },
     {RES_ERROR, "ERROR", DEF_STR("COMMAND NOT SUPPORT\r")},
+    /* final result code when AT+CMEE is 1 or 2 (e.g. set by another program sharing the module) */
+    {RES_ERROR, "ERROR", DEF_STR("+CME ERROR:")},
 #undef DEF_STR
     /* clang-format on */
 };
