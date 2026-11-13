@@ -1,9 +1,49 @@
 # Asterisk channel driver for *Quectel* and *SimCOM* modules
 
-> **About this fork.** [RoEdAl/asterisk-chan-quectel](//github.com/RoEdAl/asterisk-chan-quectel) is archived.
-> This fork adds options to run the driver on a module that is shared with another program
-> (for example the modem manager of a cellular router): `sms`, `shared_cfg`, `urc_cfg` and `clcc_poll`.
-> All of them default to the original behavior. See [Configuration](#configuration) below.
+## About this fork: shared-module mode
+
+[RoEdAl/asterisk-chan-quectel](//github.com/RoEdAl/asterisk-chan-quectel) is archived. This fork keeps it alive and adds a **shared-module mode**: chan_quectel can now run on a module that **another program already manages**, for example the modem manager of a cellular router, which keeps the data connection and the SMS, while Asterisk takes the voice calls.
+
+Without this mode, the driver changes settings that are global to the module, competes for incoming SMS, and never hears about calls when the module sends its notifications to the other program's port. Incoming calls are missed and finished calls are never released.
+
+### What it adds
+
+| Option | Default | Purpose |
+| ------ | :-----: | ------- |
+| `sms` | **on** | `off`: leave SMS to the other program. The driver does not touch the SMS format, storage or indications, and never reads or deletes a message. |
+| `shared_cfg` | **on** | `off`: keep the module-global settings of the other program (`AT+CSCS`, `AT+CMEE`, `AT+CSSN`, `AT+VTD`, `AT+COPS` format, `AT+CREG`, `AT+CEREG`, `AT+QTONEDET`). |
+| `urc_cfg` | **on** | `off`: keep the other program's call state notification settings (`AT+QINDCFG`, `AT^DSCI`). |
+| `clcc_poll` | **0** | `N` ms (250-10000): follow calls by polling `AT+CLCC` when notifications go to another port (`AT+QURCCFG="urcport"`). Finished calls are released automatically. |
+
+It also recognizes `+CME ERROR:` as a final error. Before, a failed command waited for its timeout when verbose errors were enabled, for example by the other program.
+
+**Every default keeps the original behavior.** Existing configurations work unchanged.
+
+### Example: module shared with a router
+
+```ini
+[defaults]
+resetmodem = no      ; no ATZ: the module state belongs to the other program
+callwaiting = auto   ; leave the operator's call waiting setting as it is
+sms = off
+shared_cfg = off
+urc_cfg = off
+clcc_poll = 1000
+
+[quectel0]
+audio = /dev/ttyUSB1  ; serial voice port
+data = /dev/ttyUSB3   ; an AT port the other program does not use
+```
+
+### Tested
+
+- Quectel **EG06-E**, voice over the serial audio port (`AT+QPCMV`). The module is shared with a cellular router's modem manager, which keeps the data connection and the SMS.
+- Incoming and outgoing calls in **LTE with VoLTE** and with **3G fallback**, local and remote hang-up.
+- Unit and integration tests of the router project that uses this driver, on a simulated module.
+
+Pull requests are welcome. Credits for the driver go to its original authors: chan_dongle, [IchthysMaranatha](//github.com/IchthysMaranatha/asterisk-chan-quectel) and [RoEdAl](//github.com/RoEdAl/asterisk-chan-quectel). License: GPL-2.0, see [LICENSE.md](LICENSE.md).
+
+----
 
 See original [README](//github.com/IchthysMaranatha/asterisk-chan-quectel/blob/master/README.md) of this project.
 
