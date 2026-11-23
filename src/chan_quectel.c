@@ -960,16 +960,20 @@ struct cpvt* pvt_channel_find_last_initialized(struct pvt* pvt)
 
 /*
  * the outgoing call a newly listed dialing/alerting call belongs to, with AT+CLCC polling.
- * Only a call whose ATD was answered OK (state DIALING) and that the modem has not listed yet
- * qualifies: never an active or held call (pvt_channel_find_last_initialized would accept them
- * and give them the new index), nor a call whose ATD is still queued (the listed call cannot be it).
+ * Only an outgoing call the modem has not listed yet qualifies, never an active or held call
+ * (pvt_channel_find_last_initialized would accept them and give them the new index).
+ * - From an AT+CLCC response (accept_init = 0): only a call whose ATD was answered OK (DIALING). The
+ *   AT queue is serial, so a call whose ATD is still queued cannot be the listed one.
+ * - From a +QIND "ccinfo" URC (accept_init = 1, modules that send them, e.g. the EC25 in URC mode):
+ *   the URC may arrive before the OK of ATD, so a call still in INIT qualifies too.
  */
-struct cpvt* pvt_channel_find_unlisted_outgoing(struct pvt* pvt)
+struct cpvt* pvt_channel_find_unlisted_outgoing(struct pvt* pvt, int accept_init)
 {
     struct cpvt* cpvt;
 
     AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
-        if (CPVT_DIR_OUTGOING(cpvt) && cpvt->state == CALL_STATE_DIALING && !CPVT_TEST_FLAG(cpvt, CALL_FLAG_IDX_KNOWN)) {
+        if (CPVT_DIR_OUTGOING(cpvt) && !CPVT_TEST_FLAG(cpvt, CALL_FLAG_IDX_KNOWN) &&
+            (cpvt->state == CALL_STATE_DIALING || (accept_init && cpvt->state == CALL_STATE_INIT))) {
             return cpvt;
         }
     }

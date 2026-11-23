@@ -178,6 +178,7 @@ typedef struct pvt {
     volatile dev_state_t current_state;   /*!< current state */
 
     /* AT+CLCC polling (clcc_poll) */
+    unsigned int clcc_parsing;                          /*!< handle_clcc() called from an AT+CLCC response, not from a URC */
     unsigned int clcc_nvoice;                           /*!< voice calls listed by the AT+CLCC being processed */
     unsigned char clcc_unknown[MAX_CALL_IDX + 1];       /*!< calls unknown to the driver listed by it: call state + 1, 0 = not listed */
     unsigned char clcc_unknown_polls[MAX_CALL_IDX + 1]; /*!< consecutive polls listing each unknown call */
@@ -261,7 +262,7 @@ static inline struct pvt* pvt_msg_find_by_resource(const char* resource, unsigne
 struct cpvt* pvt_channel_find_by_call_idx(struct pvt* pvt, int call_idx);
 struct cpvt* pvt_channel_find_active(struct pvt* pvt);
 struct cpvt* pvt_channel_find_last_initialized(struct pvt* pvt);
-struct cpvt* pvt_channel_find_unlisted_outgoing(struct pvt* pvt);
+struct cpvt* pvt_channel_find_unlisted_outgoing(struct pvt* pvt, int accept_init);
 
 void pvt_unlock(struct pvt* const pvt);
 

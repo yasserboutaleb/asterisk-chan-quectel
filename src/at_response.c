@@ -1059,13 +1059,16 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
         }
     } else {
         const int polling = CONF_SHARED(pvt, clcc_poll) > 0;
+        /* from an AT+CLCC response (the poll), not from a +QIND "ccinfo" URC. A URC may come
+         * before the OK of ATD, and is never used to declare a call unknown: the next poll decides. */
+        const int from_poll = polling && pvt->clcc_parsing;
 
         switch (state) {
             case CALL_STATE_DIALING:
             case CALL_STATE_ALERTING:
-                /* with AT+CLCC polling, only an outgoing call whose ATD was answered and that
-                 * the modem has not listed yet can be this one (pvt_channel_find_unlisted_outgoing) */
-                cpvt = polling ? pvt_channel_find_unlisted_outgoing(pvt) : pvt_channel_find_last_initialized(pvt);
+                /* with AT+CLCC polling, only an outgoing call the modem has not listed yet can be
+                 * this one (pvt_channel_find_unlisted_outgoing) */
+                cpvt = polling ? pvt_channel_find_unlisted_outgoing(pvt, !from_poll) : pvt_channel_find_last_initialized(pvt);
 
                 if (mpty) {
                     if (!CONF_SHARED(pvt, multiparty)) {
@@ -1094,7 +1097,9 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
                         at_enqueue_hangup(cpvt, cpvt->call_idx, AST_CAUSE_NORMAL_CLEARING);
                     }
                 } else if (polling) {
-                    clcc_unknown_add(pvt, call_idx, state);
+                    if (from_poll) {
+                        clcc_unknown_add(pvt, call_idx, state);
+                    }
                     process_state = 0;
                 } else {
                     at_enqueue_hangup(&pvt->sys_chan, call_idx, AST_CAUSE_CALL_REJECTED);
@@ -1108,7 +1113,9 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
                 /* an active or held call the driver does not know (released too early, or answered
                  * by someone else): nobody is on the SIP side, it is hung up by clcc_poll_unknown() */
                 if (polling) {
-                    clcc_unknown_add(pvt, call_idx, state);
+                    if (from_poll) {
+                        clcc_unknown_add(pvt, call_idx, state);
+                    }
                     process_state = 0;
                 }
                 break;
@@ -1290,7 +1297,9 @@ static int at_response_clcc(struct pvt* const pvt, const struct ast_str* const r
         }
 
         ++pvt->clcc_nvoice; /* voice calls listed by this AT+CLCC (clcc_poll_unknown) */
+        pvt->clcc_parsing = 1u; /* tells handle_clcc() that this line comes from AT+CLCC, not a URC */
         handle_clcc(pvt, call_idx, dir, state, mode, mpty ? TRIBOOL_TRUE : TRIBOOL_FALSE, number, type);
+        pvt->clcc_parsing = 0u;
     }
 
     return 0;
@@ -1456,7 +1465,9 @@ static void clcc_poll_unknown(struct pvt* const pvt)
         const unsigned int listed = pvt->clcc_unknown[idx];
 
         pvt->clcc_unknown[idx] = 0u;
-        if (!listed) {
+        /* not listed, or known by now: a URC (+QIND "ccinfo") or a later line of the same AT+CLCC may
+         * have given this index to a call of the driver since it was recorded */
+        if (!listed || pvt_channel_find_by_call_idx(pvt, (int)idx)) {
             pvt->clcc_unknown_polls[idx] = 0u;
             continue;
         }
