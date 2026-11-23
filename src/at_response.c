@@ -978,22 +978,50 @@ static void clcc_unknown_add(struct pvt* const pvt, const unsigned int call_idx,
     }
 }
 
+/*
+ * RUT360: the modem gives an index to a new call as soon as the previous call with this index ends,
+ * which can be before two polls have confirmed that end. A call listed under the index of a known call
+ * but with the other direction, or back to a setup state after being active or held, is a new call.
+ */
+static int clcc_index_reused(const struct cpvt* const cpvt, const unsigned int dir, const unsigned int state)
+{
+    if (dir != CPVT_DIRECTION(cpvt)) {
+        return 1;
+    }
+
+    switch (cpvt->state) {
+        case CALL_STATE_ACTIVE:
+        case CALL_STATE_ONHOLD:
+            return state == CALL_STATE_DIALING || state == CALL_STATE_ALERTING || state == CALL_STATE_INCOMING || state == CALL_STATE_WAITING;
+
+        default:
+            return 0;
+    }
+}
+
 static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, const unsigned int dir, const unsigned int state, const unsigned int mode,
                         const tristate_bool_t mpty, const char* const number, const unsigned int type)
 {
     struct cpvt* cpvt = pvt_channel_find_by_call_idx(pvt, (int)call_idx);
     int process_state = 1;
 
-    if (cpvt) {
-        /* cpvt alive */
-        CPVT_SET_FLAG(cpvt, CALL_FLAG_ALIVE);
+    if (cpvt && CONF_SHARED(pvt, clcc_poll) > 0 && state != CALL_STATE_RELEASED && clcc_index_reused(cpvt, dir, state)) {
+        /* RUT360: the previous call with this index is over: release it, then handle the new call. Before,
+         * the new call was ignored ("direction mismatch") and the previous one kept, which the AT+CLCC
+         * sweep could even take for a call refusing its hangup and hang up the new call (report 14). */
+        ast_log(LOG_WARNING, "[%s] CLCC poll - call idx:%u reused by the modem for a new call, previous call released\n", PVT_ID(pvt), call_idx);
+        cpvt_change_state(cpvt, CALL_STATE_RELEASED, AST_CAUSE_NORMAL_CLEARING);
+        cpvt = NULL;
+    }
 
+    if (cpvt) {
         if (dir != CPVT_DIRECTION(cpvt)) {
             ast_log(LOG_ERROR, "[%s] CLCC call idx:%d - direction mismatch %d/%d\n", PVT_ID(pvt), cpvt->call_idx, dir, CPVT_DIRECTION(cpvt));
             return;
         }
 
-        CPVT_SET_FLAG(cpvt, CALL_FLAG_IDX_KNOWN);
+        /* cpvt alive (RUT360: only once the direction matches, otherwise this is another call) */
+        CPVT_SET_FLAGS(cpvt, CALL_FLAG_ALIVE | CALL_FLAG_IDX_KNOWN);
 
         if (mpty) {
             if (CONF_SHARED(pvt, multiparty)) {
