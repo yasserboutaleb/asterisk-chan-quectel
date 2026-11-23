@@ -46,11 +46,13 @@ Found in production with the shared-module mode (no call state notifications, `c
 - **Lock held after a call.** A channel read or write that waited for the device lock while the call was released could unlock through freed memory and leave the device locked for ever; the call is now revalidated under the lock.
 - **Module reset.** Right after a reset the module can refuse `AT+QPCMV?`; the device is restarted every 15 s (20 attempts at most) instead of staying "Not initialized".
 - A missing `break` after an error on `AT^DSCI=0` no longer disables voice.
+- **Call state notifications and polling together.** These fixes need `clcc_poll`, also on a module that keeps its call state notifications (`urc_cfg=on`, e.g. an EC25 driven by this driver alone). The "dialing" `+QIND "ccinfo"` notification can arrive before the `OK` of `ATD`: it now attaches the outgoing call still being dialled, and only the poll declares a call unknown. Before, every outgoing call was hung up as unknown.
 
 ### Tested
 
 - Quectel **EG06-E**, voice over the serial audio port (`AT+QPCMV`). The module is shared with a cellular router's modem manager, which keeps the data connection and the SMS.
 - Quectel **EC25** in the same shared-module mode, on another router.
+- Quectel **EC25-E** alone on a Raspberry Pi, voice over USB audio (`uac=yes`), call state notifications plus `clcc_poll=1000`.
 - Incoming and outgoing calls in **LTE with VoLTE** and with **3G fallback**, local and remote hang-up, early cancels, a module reset during a call session, and a 48 h endurance run in production.
 - Unit and integration tests of the router project that uses this driver, on a simulated module (refused hang-ups, late listing, unknown calls, reused index, module reset, network hang-up while voice is written).
 
