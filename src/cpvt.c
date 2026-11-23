@@ -269,7 +269,9 @@ static void change_state_no_channel(struct cpvt* const cpvt, struct pvt* const p
         case CALL_STATE_ALERTING:
         case CALL_STATE_INCOMING:
         case CALL_STATE_WAITING:
-            if (at_enqueue_hangup(&pvt->sys_chan, cpvt->call_idx, AST_CAUSE_NORMAL_UNSPECIFIED)) {
+            /* the call itself, not sys_chan, so that a provisional index is never used
+             * (at_enqueue_hangup); its queued commands go to sys_chan if it is freed first */
+            if (at_enqueue_hangup(cpvt, cpvt->call_idx, AST_CAUSE_NORMAL_UNSPECIFIED)) {
                 ast_log(LOG_ERROR, "[%s] Unable to hangup call id:%d\n", PVT_ID(pvt), cpvt->call_idx);
             }
             break;

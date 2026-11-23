@@ -502,7 +502,11 @@ int pvt_get_pseudo_call_idx(const struct pvt* pvt)
         SET_BIT(bits, cpvt->call_idx);
     }
 
-    for (dwords = 1; dwords <= MAX_CALL_IDX; dwords++) {
+    /*
+     * provisional index taken from the top of the range, so that it never equals an
+     * index the modem uses (data connections first, then voice calls, from 1 upwards).
+     */
+    for (dwords = MAX_CALL_IDX; dwords >= 1; dwords--) {
         if (!TEST_BIT(bits, dwords)) {
             return dwords;
         }
@@ -952,6 +956,25 @@ struct cpvt* pvt_channel_find_last_initialized(struct pvt* pvt)
     }
 
     return res;
+}
+
+/*
+ * the outgoing call a newly listed dialing/alerting call belongs to, with AT+CLCC polling.
+ * Only a call whose ATD was answered OK (state DIALING) and that the modem has not listed yet
+ * qualifies: never an active or held call (pvt_channel_find_last_initialized would accept them
+ * and give them the new index), nor a call whose ATD is still queued (the listed call cannot be it).
+ */
+struct cpvt* pvt_channel_find_unlisted_outgoing(struct pvt* pvt)
+{
+    struct cpvt* cpvt;
+
+    AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
+        if (CPVT_DIR_OUTGOING(cpvt) && cpvt->state == CALL_STATE_DIALING && !CPVT_TEST_FLAG(cpvt, CALL_FLAG_IDX_KNOWN)) {
+            return cpvt;
+        }
+    }
+
+    return NULL;
 }
 
 #/* */

@@ -331,6 +331,19 @@ static int at_response_ok(struct pvt* const pvt, const at_res_t at_res, const at
             break;
 
         case CMD_AT_D:
+            if (task->cpvt == &pvt->sys_chan) {
+                /*
+                 * the call was released, and its cpvt freed, before its ATD was answered:
+                 * the modem now dials a call nobody owns. Never change the state of sys_chan (it
+                 * would also leave pvt->dialing set). Hang it up by AT+CHUP when no other call
+                 * exists; otherwise the AT+CLCC poll hangs it up as an unknown call.
+                 */
+                ast_log(LOG_WARNING, "[%s] Dial answered after its call was released, hanging up\n", PVT_ID(pvt));
+                if (PVT_NO_CHANS(pvt)) {
+                    at_enqueue_hangup_unknown(pvt, 0, 1);
+                }
+                break;
+            }
             pvt->dialing = 1;
             cpvt_change_state(task->cpvt, CALL_STATE_DIALING, 0);
         /* fall through */
@@ -723,7 +736,9 @@ static int at_response_error(struct pvt* const pvt, const at_res_t at_res, const
             /* fall through */
         case CMD_AT_D:
             at_err_response_err(pvt, ecmd, "Dial failed");
-            cpvt_change_state(task->cpvt, CALL_STATE_RELEASED, AST_CAUSE_NORMAL_TEMPORARY_FAILURE);
+            if (task->cpvt != &pvt->sys_chan) { /* call already released and freed: nothing to release */
+                cpvt_change_state(task->cpvt, CALL_STATE_RELEASED, AST_CAUSE_NORMAL_TEMPORARY_FAILURE);
+            }
             break;
 
         case CMD_AT_CPCMREG1:
@@ -742,7 +757,13 @@ static int at_response_error(struct pvt* const pvt, const at_res_t at_res, const
         case CMD_AT_CHUP:
         case CMD_AT_QHUP:
         case CMD_AT_CHLD_1x:
-            at_err_response_err(pvt, ecmd, "Error sending hangup for call idx:%d", task->cpvt->call_idx);
+            if (task->cpvt == &pvt->sys_chan) {
+                at_err_response_err(pvt, ecmd, "Error sending hangup for a call unknown to the driver");
+            } else if (!CPVT_TEST_FLAG(task->cpvt, CALL_FLAG_IDX_KNOWN)) {
+                at_err_response_err(pvt, ecmd, "Error sending hangup for a call not listed by the modem yet");
+            } else {
+                at_err_response_err(pvt, ecmd, "Error sending hangup for call idx:%d", task->cpvt->call_idx);
+            }
             break;
 
         case CMD_AT_CMGR:
@@ -927,7 +948,7 @@ static int start_pbx(struct pvt* const pvt, const char* const number, const int 
 
     struct cpvt* const cpvt = ast_channel_tech_pvt(channel);
     // FIXME: not execute if channel_new() failed
-    CPVT_SET_FLAG(cpvt, CALL_FLAG_NEED_HANGUP);
+    CPVT_SET_FLAGS(cpvt, CALL_FLAG_NEED_HANGUP | CALL_FLAG_IDX_KNOWN); /* index read from AT+CLCC */
 
     /* ast_pbx_start() usually failed if asterisk.conf minmemfree
      * set too low, try drop buffer cache
@@ -946,6 +967,14 @@ static int start_pbx(struct pvt* const pvt, const char* const number, const int 
     return 0;
 }
 
+/* remember a call listed by the current AT+CLCC that the driver does not know (clcc_poll_unknown) */
+static void clcc_unknown_add(struct pvt* const pvt, const unsigned int call_idx, const unsigned int state)
+{
+    if (call_idx <= MAX_CALL_IDX && state <= CALL_STATE_WAITING) {
+        pvt->clcc_unknown[call_idx] = (unsigned char)(state + 1u);
+    }
+}
+
 static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, const unsigned int dir, const unsigned int state, const unsigned int mode,
                         const tristate_bool_t mpty, const char* const number, const unsigned int type)
 {
@@ -960,6 +989,8 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
             ast_log(LOG_ERROR, "[%s] CLCC call idx:%d - direction mismatch %d/%d\n", PVT_ID(pvt), cpvt->call_idx, dir, CPVT_DIRECTION(cpvt));
             return;
         }
+
+        CPVT_SET_FLAG(cpvt, CALL_FLAG_IDX_KNOWN);
 
         if (mpty) {
             if (CONF_SHARED(pvt, multiparty)) {
@@ -981,10 +1012,14 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
             process_state = cpvt_change_state(cpvt, state, 0);
         }
     } else {
+        const int polling = CONF_SHARED(pvt, clcc_poll) > 0;
+
         switch (state) {
             case CALL_STATE_DIALING:
             case CALL_STATE_ALERTING:
-                cpvt = pvt_channel_find_last_initialized(pvt);
+                /* with AT+CLCC polling, only an outgoing call whose ATD was answered and that
+                 * the modem has not listed yet can be this one (pvt_channel_find_unlisted_outgoing) */
+                cpvt = polling ? pvt_channel_find_unlisted_outgoing(pvt) : pvt_channel_find_last_initialized(pvt);
 
                 if (mpty) {
                     if (!CONF_SHARED(pvt, multiparty)) {
@@ -995,13 +1030,44 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
                 }
 
                 if (cpvt) {
-                    cpvt->call_idx = (short)call_idx;
-                    process_state  = cpvt_change_state(cpvt, state, 0);
+                    const unsigned int waited = cpvt->clcc_miss;
+
+                    cpvt->call_idx  = (short)call_idx;
+                    cpvt->clcc_miss = 0u;
+                    CPVT_SET_FLAGS(cpvt, CALL_FLAG_ALIVE | CALL_FLAG_IDX_KNOWN);
+                    if (polling && waited >= 2u) {
+                        /* the first version of the sweep released such a call after two polls */
+                        ast_log(LOG_WARNING, "[%s] CLCC poll - outgoing call listed by the modem after %u polls, idx:%u\n", PVT_ID(pvt), waited + 1u,
+                                call_idx);
+                    }
+                    process_state = cpvt_change_state(cpvt, state, 0);
+                    if (!cpvt->channel && !process_state) {
+                        /* hung up by Asterisk before the modem listed it: hang up now by its real index
+                         * (a change of state does it in change_state_no_channel) */
+                        ast_debug(1, "[%s] CLCC poll - call idx:%u listed after its hangup, hanging up\n", PVT_ID(pvt), call_idx);
+                        at_enqueue_hangup(cpvt, cpvt->call_idx, AST_CAUSE_NORMAL_CLEARING);
+                    }
+                } else if (polling) {
+                    clcc_unknown_add(pvt, call_idx, state);
+                    process_state = 0;
                 } else {
                     at_enqueue_hangup(&pvt->sys_chan, call_idx, AST_CAUSE_CALL_REJECTED);
                     ast_log(LOG_ERROR, "[%s] Answered unexisting or multiparty incoming call - idx:%d, hanging up!\n", PVT_ID(pvt), call_idx);
                     process_state = 0;
                 }
+                break;
+
+            case CALL_STATE_ACTIVE:
+            case CALL_STATE_ONHOLD:
+                /* an active or held call the driver does not know (released too early, or answered
+                 * by someone else): nobody is on the SIP side, it is hung up by clcc_poll_unknown() */
+                if (polling) {
+                    clcc_unknown_add(pvt, call_idx, state);
+                    process_state = 0;
+                }
+                break;
+
+            default:
                 break;
         }
     }
@@ -1172,11 +1238,12 @@ static int at_response_clcc(struct pvt* const pvt, const struct ast_str* const r
             continue;
         }
 
-        if (mode > CALL_STATE_WAITING) {
+        if (state > CALL_STATE_WAITING) { /* upstream tested mode here, which is always voice at this point */
             ast_debug(4, "[%s] CLCC - invalid call state, idx:%u dir:%u state:%u nubmer:%s\n", PVT_ID(pvt), call_idx, dir, state, number);
             continue;
         }
 
+        ++pvt->clcc_nvoice; /* voice calls listed by this AT+CLCC (clcc_poll_unknown) */
         handle_clcc(pvt, call_idx, dir, state, mode, mpty ? TRIBOOL_TRUE : TRIBOOL_FALSE, number, type);
     }
 
@@ -1187,11 +1254,31 @@ static int at_response_clcc(struct pvt* const pvt, const struct ast_str* const r
  * clcc_poll: without call state URCs nothing signals a call end, so a call that
  * is no longer listed by AT+CLCC is released here. Called on the final OK of every
  * AT+CLCC (also when the list is empty, which produces no +CLCC line at all).
- * Two consecutive misses are required for a known call (avoids races with ATD/ATA);
- * an outgoing call that never appeared (CALL_STATE_INIT without index) is released
- * after 5 polls. ALIVE flags are cleared afterwards for the next poll.
+ * - A call the modem has listed is released after two consecutive misses.
+ * - An outgoing call the modem has not listed yet (no CALL_FLAG_IDX_KNOWN) is judged
+ *   differently: not before its ATD is answered (30 polls at most), then 10 polls to
+ *   appear while it is set up (the LTE -> 3G fallback of a network without VoLTE delays
+ *   it by seconds: with two polls, such calls failed), or two once Asterisk hung it up.
+ * - A call still listed after its channel was hung up is hung up again (clcc_poll_orphan).
+ * - Calls listed by the modem that the driver does not know are hung up (clcc_poll_unknown).
+ * ALIVE flags are cleared afterwards for the next poll.
  */
 static void clcc_poll_orphan(struct pvt* const pvt, struct cpvt* const cpvt);
+static void clcc_poll_unknown(struct pvt* const pvt);
+
+/* the call still has a command in the AT queue (its ATD not answered yet) */
+static int cpvt_has_queued_task(const struct pvt* const pvt, const struct cpvt* const cpvt)
+{
+    const struct at_queue_task* task;
+
+    AST_LIST_TRAVERSE(&pvt->at_queue, task, entry) {
+        if (task->cpvt == cpvt) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
 
 static void clcc_poll_sweep(struct pvt* const pvt)
 {
@@ -1202,8 +1289,9 @@ static void clcc_poll_sweep(struct pvt* const pvt)
     }
 
     {
-        static const unsigned int MISS_KNOWN = 2u;
-        static const unsigned int MISS_INIT  = 5u;
+        static const unsigned int MISS_KNOWN    = 2u;  /* listed call, or not listed and already hung up */
+        static const unsigned int MISS_UNLISTED = 10u; /* outgoing call being set up, not listed yet */
+        static const unsigned int MISS_PENDING  = 30u; /* outgoing call whose ATD is not answered yet */
 
         struct {
             unsigned int idx;
@@ -1222,9 +1310,20 @@ static void clcc_poll_sweep(struct pvt* const pvt)
 
             ++cpvt->clcc_miss;
 
-            if (cpvt->state == CALL_STATE_INIT && cpvt->call_idx <= MIN_CALL_IDX) {
-                if (cpvt->clcc_miss >= MISS_INIT) {
-                    ast_log(LOG_WARNING, "[%s] CLCC poll - outgoing call never listed, releasing\n", PVT_ID(pvt));
+            if (!CPVT_TEST_FLAG(cpvt, CALL_FLAG_IDX_KNOWN)) {
+                const int queued         = cpvt_has_queued_task(pvt, cpvt);
+                const unsigned int limit = queued ? MISS_PENDING : (cpvt->channel ? MISS_UNLISTED : MISS_KNOWN);
+
+                if (cpvt->clcc_miss >= limit) {
+                    if (cpvt->channel || queued) {
+                        ast_log(LOG_WARNING, "[%s] CLCC poll - outgoing call not listed by the modem after %u polls%s, releasing\n", PVT_ID(pvt),
+                                cpvt->clcc_miss, queued ? " (dial not answered)" : "");
+                    }
+                    if (cpvt->channel && !queued) {
+                        /* in case the modem still sets it up: AT+CHUP if it is the only call (at_enqueue_hangup),
+                         * otherwise it is hung up as an unknown call if the modem lists it later */
+                        at_enqueue_hangup(cpvt, cpvt->call_idx, AST_CAUSE_NORMAL_CLEARING);
+                    }
                     cpvt_change_state(cpvt, CALL_STATE_RELEASED, AST_CAUSE_NORMAL_TEMPORARY_FAILURE);
                     break; /* list may have changed, next poll continues */
                 }
@@ -1244,9 +1343,61 @@ static void clcc_poll_sweep(struct pvt* const pvt)
         }
     }
 
+    clcc_poll_unknown(pvt);
+
     AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
         CPVT_RESET_FLAG(cpvt, CALL_FLAG_ALIVE);
     }
+}
+
+/*
+ * calls listed by the modem that the driver does not know, recorded by handle_clcc():
+ * a call released by the driver while the modem was still setting it up, a cancelled call the
+ * modem listed late, an incoming call answered by someone else. Nobody is on the SIP side:
+ * hang them up. A call being set up is hung up at once, an active or held one after 3 polls
+ * (it may be a call the driver is about to learn about). The hangup is repeated at each poll
+ * while the call is listed; every third one uses AT+CHUP when this is the only voice call
+ * listed and the driver has no call (AT+CHUP releases every voice call), since the modem may
+ * refuse AT+QHUP for a while (report 14).
+ */
+static void clcc_poll_unknown(struct pvt* const pvt)
+{
+    static const unsigned int ACTIVE_GRACE = 3u;
+    static const unsigned int CHUP_EVERY   = 3u;
+
+    for (unsigned int idx = 0u; idx <= MAX_CALL_IDX; ++idx) {
+        const unsigned int listed = pvt->clcc_unknown[idx];
+
+        pvt->clcc_unknown[idx] = 0u;
+        if (!listed) {
+            pvt->clcc_unknown_polls[idx] = 0u;
+            continue;
+        }
+        if (pvt->clcc_unknown_polls[idx] < 255u) {
+            ++pvt->clcc_unknown_polls[idx];
+        }
+
+        const unsigned int polls   = pvt->clcc_unknown_polls[idx];
+        const call_state_t state   = (call_state_t)(listed - 1u);
+        const int being_set_up     = state == CALL_STATE_DIALING || state == CALL_STATE_ALERTING;
+        const unsigned int attempt = being_set_up ? polls : (polls >= ACTIVE_GRACE ? polls - ACTIVE_GRACE + 1u : 0u);
+
+        if (!attempt) {
+            continue;
+        }
+
+        const int use_chup = !(attempt % CHUP_EVERY) && pvt->clcc_nvoice == 1u && PVT_NO_CHANS(pvt);
+
+        if (attempt == 1u || !(attempt % 10u)) {
+            ast_log(LOG_WARNING, "[%s] CLCC poll - unknown call idx:%u (%s) listed by the modem, hanging up (%u)\n", PVT_ID(pvt), idx,
+                    call_state2str(state), attempt);
+        }
+        if (at_enqueue_hangup_unknown(pvt, (int)idx, use_chup)) {
+            ast_log(LOG_ERROR, "[%s] Unable to queue hangup for unknown call idx:%u\n", PVT_ID(pvt), idx);
+        }
+    }
+
+    pvt->clcc_nvoice = 0u;
 }
 
 /*

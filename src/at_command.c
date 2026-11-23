@@ -1383,6 +1383,25 @@ int at_enqueue_hangup(struct cpvt* cpvt, int call_idx, int release_cause)
 {
     struct pvt* const pvt = cpvt->pvt;
 
+    /*
+     * with AT+QHUP, a call is always hung up by its own index, whatever its state and
+     * the number of calls (AT+CHLD=1x below is never needed, and its upstream command string is
+     * sent without the index). A call the modem has not listed yet only has a provisional index
+     * (pvt_get_pseudo_call_idx): AT+QHUP would aim at nothing, or at a data connection. Such a
+     * call is hung up by AT+CHUP when it is the only one; otherwise as soon as the modem lists it
+     * (handle_clcc). sys_chan callers always pass an index read from AT+CLCC.
+     */
+    if (!pvt->is_simcom && CONF_SHARED(pvt, qhup)) {
+        if (cpvt == &pvt->sys_chan || CPVT_TEST_FLAG(cpvt, CALL_FLAG_IDX_KNOWN)) {
+            return at_enqueue_qhup(cpvt, call_idx, release_cause);
+        }
+        if (PVT_STATE(pvt, chansno) <= 1u) {
+            return at_enqueue_chup(cpvt);
+        }
+        ast_debug(1, "[%s] Call not listed by the modem yet: hangup when it is listed\n", PVT_ID(pvt));
+        return 0;
+    }
+
     if (cpvt == &pvt->sys_chan || CPVT_DIR_INCOMING(cpvt) || (cpvt->state != CALL_STATE_INIT && cpvt->state != CALL_STATE_DIALING)) {
         /* FIXME: other channels may be in RELEASED or INIT state */
         if (PVT_STATE(pvt, chansno) > 1) {
@@ -1426,6 +1445,22 @@ int at_enqueue_hangup_retry(struct cpvt* const cpvt, const unsigned int attempt)
     }
 
     return at_enqueue_qhup(cpvt, cpvt->call_idx, AST_CAUSE_NORMAL_CLEARING);
+}
+
+/*!
+ * \brief hang up a call listed by the modem that the driver does not know
+ * \param pvt -- device
+ * \param call_idx -- index read from AT+CLCC
+ * \param use_chup -- use AT+CHUP (caller checked it is the only voice call) instead of AT+QHUP
+ * \return 0 on success
+ */
+int at_enqueue_hangup_unknown(struct pvt* const pvt, const int call_idx, const int use_chup)
+{
+    if (use_chup || pvt->is_simcom || !CONF_SHARED(pvt, qhup)) {
+        return at_enqueue_chup(&pvt->sys_chan);
+    }
+
+    return at_enqueue_qhup(&pvt->sys_chan, call_idx, AST_CAUSE_CALL_REJECTED);
 }
 
 /*!

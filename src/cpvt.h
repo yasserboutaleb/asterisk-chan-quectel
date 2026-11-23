@@ -47,7 +47,8 @@ typedef enum {
     CALL_FLAG_MULTIPARTY       = 256,  /*!< internal, CLCC mpty is 1 */
     CALL_FLAG_DIRECTION        = 512,  /*!< call direction */
     CALL_FLAG_LOCAL_CHANNEL    = 1024, /*!< local channel flag */
-    CALL_FLAG_INTERNAL_REQUEST = 2048  /*!< internal request */
+    CALL_FLAG_INTERNAL_REQUEST = 2048, /*!< internal request */
+    CALL_FLAG_IDX_KNOWN        = 4096  /*!< call_idx comes from the modem (AT+CLCC), not a provisional one */
 } call_flag_t;
 
 #define CALL_DIR_INCOMING 1u
