@@ -182,7 +182,7 @@ typedef struct pvt {
     unsigned char clcc_unknown[MAX_CALL_IDX + 1];       /*!< calls unknown to the driver listed by it: call state + 1, 0 = not listed */
     unsigned char clcc_unknown_polls[MAX_CALL_IDX + 1]; /*!< consecutive polls listing each unknown call */
     unsigned int voice_enable_failed;                   /*!< AT+QPCMV=1,x refused: enable it again (clcc_poll_voice_retry) */
-    unsigned int voice_init_retries;                    /*!< RUT360: AT+QPCMV? refused during init (modem still booting): restarts scheduled */
+    unsigned int voice_init_retries;                    /*!< AT+QPCMV? refused during init (modem still booting): restarts scheduled */
     unsigned int voice_retry_polls;                     /*!< polls since the last attempt to enable voice */
 
     pvt_config_t settings; /*!< all device settings from config file */

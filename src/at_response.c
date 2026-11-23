@@ -685,11 +685,11 @@ static int at_response_error(struct pvt* const pvt, const at_res_t at_res, const
 
         case CMD_AT_DSCI_OFF:
             at_err_response_dbg(CONF_SHARED(pvt, dsci) ? 4 : 1, pvt, ecmd, "Error disabling indications");
-            break; /* RUT360: was missing, an error on ^DSCI=0 fell through and disabled voice */
+            break; /* was missing, an error on ^DSCI=0 fell through and disabled voice */
 
         case CMD_AT_CVOICE:
             pvt->has_voice = 0;
-            /* RUT360: right after a modem reset (CFUN=1,1, RutOS reloading the modem, boot) the AT port
+            /* right after a modem reset (CFUN=1,1, RutOS reloading the modem, boot) the AT port
              * can answer before the voice stack and AT+QPCMV? returns ERROR. The init batch stopped here
              * (CMD_AT_FINAL never ran) and the device stayed "Not initialized" until Asterisk restarted.
              * Schedule a device restart instead, picked up by the device manager on its next pass
@@ -994,7 +994,7 @@ static void clcc_unknown_add(struct pvt* const pvt, const unsigned int call_idx,
 }
 
 /*
- * RUT360: the modem gives an index to a new call as soon as the previous call with this index ends,
+ * the modem gives an index to a new call as soon as the previous call with this index ends,
  * which can be before two polls have confirmed that end. A call listed under the index of a known call
  * but with the other direction, or back to a setup state after being active or held, is a new call.
  */
@@ -1021,7 +1021,7 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
     int process_state = 1;
 
     if (cpvt && CONF_SHARED(pvt, clcc_poll) > 0 && state != CALL_STATE_RELEASED && clcc_index_reused(cpvt, dir, state)) {
-        /* RUT360: the previous call with this index is over: release it, then handle the new call. Before,
+        /* the previous call with this index is over: release it, then handle the new call. Before,
          * the new call was ignored ("direction mismatch") and the previous one kept, which the AT+CLCC
          * sweep could even take for a call refusing its hangup and hang up the new call (report 14). */
         ast_log(LOG_WARNING, "[%s] CLCC poll - call idx:%u reused by the modem for a new call, previous call released\n", PVT_ID(pvt), call_idx);
@@ -1035,7 +1035,7 @@ static void handle_clcc(struct pvt* const pvt, const unsigned int call_idx, cons
             return;
         }
 
-        /* cpvt alive (RUT360: only once the direction matches, otherwise this is another call) */
+        /* cpvt alive (only once the direction matches, otherwise this is another call) */
         CPVT_SET_FLAGS(cpvt, CALL_FLAG_ALIVE | CALL_FLAG_IDX_KNOWN);
 
         if (mpty) {

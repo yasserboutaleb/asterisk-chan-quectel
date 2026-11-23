@@ -410,7 +410,7 @@ void cpvt_unlock(struct cpvt* const cpvt)
 }
 
 /*
- * RUT360: lock fix ("Task skipping: no lock" for ever after a call, found on an EC25).
+ * lock fix ("Task skipping: no lock" for ever after a call, found on an EC25).
  *
  * The device thread (pvt locked) releases the cpvt when the call ends (CLCC poll "no longer
  * listed", ^DSCI end, NO CARRIER): change_state(RELEASED) clears ast_channel_tech_pvt(channel)
