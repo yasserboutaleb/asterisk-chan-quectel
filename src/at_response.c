@@ -419,6 +419,7 @@ static int at_response_ok(struct pvt* const pvt, const at_res_t at_res, const at
         case CMD_AT_CMGR:
             at_ok_response_dbg(3, pvt, ecmd, NULL);
             at_sms_retrieved(&pvt->sys_chan, 1);
+            at_sms_retrieve_next(&pvt->sys_chan);
             break;
 
         case CMD_AT_CMGD:
@@ -786,6 +787,7 @@ static int at_response_error(struct pvt* const pvt, const at_res_t at_res, const
             // log_cmd_response(LOG_ERROR, pvt, ecmd, "Error reading SMS message, resetting index");
             at_err_response_dbg(1, pvt, ecmd, "[SMS:%d] Fail to read message", pvt->incoming_sms_index);
             at_sms_retrieved(&pvt->sys_chan, 0);
+            at_sms_retrieve_next(&pvt->sys_chan);
             break;
 
         case CMD_AT_CMGD:

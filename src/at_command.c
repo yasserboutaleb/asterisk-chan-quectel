@@ -1097,6 +1097,29 @@ void at_sms_retrieved(struct cpvt* cpvt, int confirm)
     pvt->incoming_sms_type  = RES_UNKNOWN;
 }
 
+/*!
+ * \brief Read the next message announced while another one was being read, if any
+ * \param cpvt -- cpvt structure
+ * \note Called once the AT+CMGR command is over (OK or error), not on the +CMGR line: the OK of the
+ * previous command would otherwise be taken for the end of the new read.
+ */
+void at_sms_retrieve_next(struct cpvt* cpvt)
+{
+    struct pvt* const pvt = cpvt->pvt;
+
+    pvt->sms_cmgr_busy = 0;
+    while (pvt->incoming_sms_index < 0 && pvt->pending_sms_count > 0) {
+        const int idx  = pvt->pending_sms_index[0];
+        const int type = pvt->pending_sms_type[0];
+
+        pvt->pending_sms_count--;
+        memmove(pvt->pending_sms_index, pvt->pending_sms_index + 1, pvt->pending_sms_count * sizeof(pvt->pending_sms_index[0]));
+        memmove(pvt->pending_sms_type, pvt->pending_sms_type + 1, pvt->pending_sms_count * sizeof(pvt->pending_sms_type[0]));
+
+        at_enqueue_retrieve_sms(cpvt, idx, type);
+    }
+}
+
 int at_enqueue_list_messages(struct cpvt* cpvt, enum msg_status_t stat)
 {
     DECLARE_AT_CMDNT(cmgl, "+CMGL=%d");
@@ -1129,9 +1152,29 @@ int at_enqueue_retrieve_sms(struct cpvt* cpvt, int idx, int sms_type)
     struct pvt* const pvt = cpvt->pvt;
     at_queue_cmd_t cmd    = ATQ_CMD_DECLARE_DYN(CMD_AT_CMGR);
 
-    /* check if message is already being received */
-    if (pvt->incoming_sms_index >= 0) {
-        ast_debug(4, "[%s] SMS retrieve of [%d] already in progress\n", PVT_ID(pvt), pvt->incoming_sms_index);
+    /*
+     * another message is being read: remember this one and read it next (at_sms_retrieve_next).
+     * Before, it was dropped and only read at the next start of the device, e.g. the second part
+     * of a long SMS announced right after the first one. Until the end of the AT+CMGR command: a
+     * read started between the +CMGR line and its OK was taken for the previous one and deleted.
+     */
+    if (pvt->incoming_sms_index >= 0 || pvt->sms_cmgr_busy) {
+        if (idx == pvt->incoming_sms_index) {
+            return 0;
+        }
+        for (unsigned int i = 0; i < pvt->pending_sms_count; ++i) {
+            if (pvt->pending_sms_index[i] == idx) {
+                return 0;
+            }
+        }
+        if (pvt->pending_sms_count >= ARRAY_LEN(pvt->pending_sms_index)) {
+            ast_log(LOG_WARNING, "[%s][SMS:%d] Too many messages waiting, read at the next start\n", PVT_ID(pvt), idx);
+            return 0;
+        }
+        pvt->pending_sms_index[pvt->pending_sms_count] = idx;
+        pvt->pending_sms_type[pvt->pending_sms_count]  = sms_type;
+        pvt->pending_sms_count++;
+        ast_debug(2, "[%s][SMS:%d] Message [%d] being read, read next\n", PVT_ID(pvt), idx, pvt->incoming_sms_index);
         return 0;
     }
 
@@ -1148,6 +1191,7 @@ int at_enqueue_retrieve_sms(struct cpvt* cpvt, int idx, int sms_type)
         goto error;
     }
 
+    pvt->sms_cmgr_busy = 1;
     return 0;
 
 error:

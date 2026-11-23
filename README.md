@@ -48,6 +48,7 @@ Found in production with the shared-module mode (no call state notifications, `c
 - A missing `break` after an error on `AT^DSCI=0` no longer disables voice.
 - **Call state notifications and polling together.** These fixes need `clcc_poll`, also on a module that keeps its call state notifications (`urc_cfg=on`, e.g. an EC25 driven by this driver alone). The "dialing" `+QIND "ccinfo"` notification can arrive before the `OK` of `ATD`: it now attaches the outgoing call still being dialled, and only the poll declares a call unknown. Before, every outgoing call was hung up as unknown.
 - **Out-of-bounds read in state names.** Asterisk's `S_COR()` evaluates its second argument before its condition, so converting an unset value (registration state -1 before the module registers) read far past the array: `quectel show device state` crashed Asterisk on 64-bit hosts. The bound is now checked first, for every state name.
+- **SMS announced while another one is read.** A `+CMTI` (or `+CDSI`) received while the driver was reading a message was dropped, and the message was only read at the next start of the device: the second part of a long SMS announced right after the first one stayed in the module. The announced messages are now queued (8 at most) and read one after the other, once the `AT+CMGR` command in progress is over.
 
 ### Tested
 

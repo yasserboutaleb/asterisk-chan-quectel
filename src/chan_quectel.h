@@ -125,6 +125,12 @@ typedef struct pvt {
     /* SMS support */
     int incoming_sms_index;
     int incoming_sms_type;
+    /* messages announced (+CMTI, +CDSI) while another one was being read: read next, in order */
+    int pending_sms_index[8];
+    int pending_sms_type[8];
+    unsigned int pending_sms_count;
+    /* AT+CMGR sent, its OK or error not received yet (incoming_sms_index is reset on the +CMGR line) */
+    int sms_cmgr_busy;
 
     struct ast_tm module_time;
 
