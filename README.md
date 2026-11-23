@@ -35,11 +35,24 @@ audio = /dev/ttyUSB1  ; serial voice port
 data = /dev/ttyUSB3   ; an AT port the other program does not use
 ```
 
+### Robust call handling
+
+Found in production with the shared-module mode (no call state notifications, `clcc_poll` only), and fixed with tests on a simulated module:
+
+- **Refused hang-up.** When the module answers `ERROR` to a hang-up and keeps the call, the driver hangs it up again every 3 polls (alternating `AT+CHUP` and `AT+QHUP`, 20 attempts at most) instead of refusing every new call until the network ends it.
+- **Call tracking by polling.** A provisional index is never sent to the module (it could hit the data connection); an outgoing call listed late by the module (fallback from LTE to 3G takes several seconds) is no longer released too early; a call listed by the module but unknown to the driver is hung up, also after Asterisk restarts during a call; a listed call is matched strictly to the outgoing call that dialled it.
+- **Voice enabled again** after a crash during a call: the module refuses `AT+QPCMV` while a call is open; the driver retries once no call is left, and the device shows `NoVoice` meanwhile instead of `Free`.
+- **Reused call index.** An incoming call arriving under the index of a call that just ended is handled as a new call instead of being ignored and hung up.
+- **Lock held after a call.** A channel read or write that waited for the device lock while the call was released could unlock through freed memory and leave the device locked for ever; the call is now revalidated under the lock.
+- **Module reset.** Right after a reset the module can refuse `AT+QPCMV?`; the device is restarted every 15 s (20 attempts at most) instead of staying "Not initialized".
+- A missing `break` after an error on `AT^DSCI=0` no longer disables voice.
+
 ### Tested
 
 - Quectel **EG06-E**, voice over the serial audio port (`AT+QPCMV`). The module is shared with a cellular router's modem manager, which keeps the data connection and the SMS.
-- Incoming and outgoing calls in **LTE with VoLTE** and with **3G fallback**, local and remote hang-up.
-- Unit and integration tests of the router project that uses this driver, on a simulated module.
+- Quectel **EC25** in the same shared-module mode, on another router.
+- Incoming and outgoing calls in **LTE with VoLTE** and with **3G fallback**, local and remote hang-up, early cancels, a module reset during a call session, and a 48 h endurance run in production.
+- Unit and integration tests of the router project that uses this driver, on a simulated module (refused hang-ups, late listing, unknown calls, reused index, module reset, network hang-up while voice is written).
 
 Pull requests are welcome. Credits for the driver go to its original authors: chan_dongle, [IchthysMaranatha](//github.com/IchthysMaranatha/asterisk-chan-quectel) and [RoEdAl](//github.com/RoEdAl/asterisk-chan-quectel). License: GPL-2.0, see [LICENSE.md](LICENSE.md).
 
