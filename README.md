@@ -47,6 +47,7 @@ Found in production with the shared-module mode (no call state notifications, `c
 - **Module reset.** Right after a reset the module can refuse `AT+QPCMV?`; the device is restarted every 15 s (20 attempts at most) instead of staying "Not initialized".
 - A missing `break` after an error on `AT^DSCI=0` no longer disables voice.
 - **Call state notifications and polling together.** These fixes need `clcc_poll`, also on a module that keeps its call state notifications (`urc_cfg=on`, e.g. an EC25 driven by this driver alone). The "dialing" `+QIND "ccinfo"` notification can arrive before the `OK` of `ATD`: it now attaches the outgoing call still being dialled, and only the poll declares a call unknown. Before, every outgoing call was hung up as unknown.
+- **Out-of-bounds read in state names.** Asterisk's `S_COR()` evaluates its second argument before its condition, so converting an unset value (registration state -1 before the module registers) read far past the array: `quectel show device state` crashed Asterisk on 64-bit hosts. The bound is now checked first, for every state name.
 
 ### Tested
 
