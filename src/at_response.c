@@ -298,7 +298,8 @@ static int at_response_ok(struct pvt* const pvt, const at_res_t at_res, const at
         case CMD_AT_QPCMV_UAC:
             at_ok_response_dbg(3, pvt, ecmd, NULL);
 
-            pvt->has_voice = 1;
+            pvt->has_voice           = 1;
+            pvt->voice_enable_failed = 0;
             at_enqueue_qgains(&pvt->sys_chan, CONF_SHARED(pvt, txgain), CONF_SHARED(pvt, rxgain));
             at_enqueue_query_qgains(&pvt->sys_chan);
             break;
@@ -840,10 +841,12 @@ static int at_response_error(struct pvt* const pvt, const at_res_t at_res, const
 
         case CMD_AT_QPCMV_TTY:
             at_err_response_wrn(pvt, ecmd, "Cannot enable audio on serial port");
+            pvt->voice_enable_failed = 1; /* e.g. a call left by a crash is in progress: retried (clcc_poll_voice_retry) */
             break;
 
         case CMD_AT_QPCMV_UAC:
             at_err_response_wrn(pvt, ecmd, "Cannot enable UAC");
+            pvt->voice_enable_failed = 1;
             break;
 
         case CMD_AT_QTONEDET_0:
@@ -1265,6 +1268,7 @@ static int at_response_clcc(struct pvt* const pvt, const struct ast_str* const r
  */
 static void clcc_poll_orphan(struct pvt* const pvt, struct cpvt* const cpvt);
 static void clcc_poll_unknown(struct pvt* const pvt);
+static void clcc_poll_voice_retry(struct pvt* const pvt, unsigned int nvoice);
 
 /* the call still has a command in the AT queue (its ATD not answered yet) */
 static int cpvt_has_queued_task(const struct pvt* const pvt, const struct cpvt* const cpvt)
@@ -1283,6 +1287,7 @@ static int cpvt_has_queued_task(const struct pvt* const pvt, const struct cpvt* 
 static void clcc_poll_sweep(struct pvt* const pvt)
 {
     struct cpvt* cpvt;
+    const unsigned int nvoice = pvt->clcc_nvoice; /* reset by clcc_poll_unknown() */
 
     if (!pvt->initialized) {
         return;
@@ -1344,9 +1349,48 @@ static void clcc_poll_sweep(struct pvt* const pvt)
     }
 
     clcc_poll_unknown(pvt);
+    clcc_poll_voice_retry(pvt, nvoice);
 
     AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
         CPVT_RESET_FLAG(cpvt, CALL_FLAG_ALIVE);
+    }
+}
+
+/*
+ * serial audio (AT+QPCMV=1,0) is enabled once, during initialisation. The modem refuses
+ * it while a voice call is in progress: after a crash of Asterisk during a call, the restarted
+ * driver met the call left open, got ERROR, and stayed without voice (every call refused) until
+ * the next restart, while showing "Free" (seen on the lab, report 14). Enable it again every
+ * 5 polls once no voice call is listed and the driver has no call.
+ */
+static void clcc_poll_voice_retry(struct pvt* const pvt, const unsigned int nvoice)
+{
+    static const unsigned int EVERY = 5u;
+
+    if (!pvt->voice_enable_failed || pvt->has_voice || nvoice || !PVT_NO_CHANS(pvt)) {
+        pvt->voice_retry_polls = 0u;
+        return;
+    }
+    if (++pvt->voice_retry_polls < EVERY) {
+        return;
+    }
+    pvt->voice_retry_polls = 0u;
+
+    switch (CONF_UNIQ(pvt, uac)) {
+        case TRIBOOL_TRUE:
+            ast_log(LOG_WARNING, "[%s] Voice not enabled: enabling it again\n", PVT_ID(pvt));
+            pvt->voice_enable_failed = 0; /* set again if the modem refuses */
+            at_enqueue_enable_uac(&pvt->sys_chan);
+            break;
+
+        case TRIBOOL_FALSE:
+            ast_log(LOG_WARNING, "[%s] Voice not enabled: enabling it again\n", PVT_ID(pvt));
+            pvt->voice_enable_failed = 0;
+            at_enqueue_enable_tty(&pvt->sys_chan);
+            break;
+
+        default:
+            break;
     }
 }
 

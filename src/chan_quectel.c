@@ -991,6 +991,8 @@ static const char* pvt_state_base(const struct pvt* const pvt)
         state = "Not initialized";
     } else if (!pvt->gsm_registered) {
         state = "GSM not registered";
+    } else if (!pvt->has_voice && CONF_UNIQ(pvt, uac) != TRIBOOL_NONE) {
+        state = "NoVoice"; /* every call is refused (pvt_ready4voice_call): never show "Free" */
     }
     return state;
 }
