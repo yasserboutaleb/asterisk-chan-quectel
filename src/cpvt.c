@@ -409,6 +409,40 @@ void cpvt_unlock(struct cpvt* const cpvt)
     pvt_unlock(cpvt->pvt);
 }
 
+/*
+ * RUT360: lock fix ("Task skipping: no lock" for ever after a call, found on an EC25).
+ *
+ * The device thread (pvt locked) releases the cpvt when the call ends (CLCC poll "no longer
+ * listed", ^DSCI end, NO CARRIER): change_state(RELEASED) clears ast_channel_tech_pvt(channel)
+ * then calls cpvt_free(). Meanwhile the channel thread may wait for pvt->lock in channel_write()
+ * or channel_read(). The old SCOPED_CPVT_TL read cpvt->pvt from the FREED cpvt to unlock, so the
+ * real pvt->lock could stay locked and the device was dead until Asterisk restarted. Also,
+ * cpvt_try_lock() locked nothing when cpvt->channel was NULL while cpvt_unlock() still unlocked.
+ *
+ * Here the captured pvt is locked BEFORE waiting (pvts live as long as the module), then the cpvt
+ * is revalidated under the lock: the channel must still own it. The unlock always uses that same
+ * pvt pointer (see SCOPED_CHANNEL_PVT in channel.c).
+ */
+struct pvt* cpvt_channel_lock(struct ast_channel* const channel, const struct cpvt* const cpvt, struct pvt* const pvt)
+{
+    if (!channel || !cpvt || !pvt) {
+        return NULL;
+    }
+
+    while (ast_mutex_trylock(&pvt->lock)) {
+        CHANNEL_DEADLOCK_AVOIDANCE(channel);
+    }
+
+    /* tech_pvt is cleared under pvt->lock before any cpvt_free() of an attached cpvt:
+     * if the channel still points to this cpvt, it is alive and cpvt->channel can be read. */
+    if (ast_channel_tech_pvt(channel) != cpvt || cpvt->channel != channel || cpvt->pvt != pvt) {
+        ast_mutex_unlock(&pvt->lock);
+        return NULL;
+    }
+
+    return pvt;
+}
+
 void* cpvt_get_buffer(struct cpvt* const cpvt) { return cpvt->buffer + AST_FRIENDLY_OFFSET; }
 
 struct ast_frame* cpvt_prepare_voice_frame(struct cpvt* const cpvt, void* const buf, int samples, const struct ast_format* const fmt)

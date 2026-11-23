@@ -107,6 +107,10 @@ void cpvt_lock(struct cpvt* const);
 void cpvt_try_lock(struct cpvt* const);
 void cpvt_unlock(struct cpvt* const);
 
+/* RUT360: pvt lock for channel callbacks (read/write/func), with cpvt revalidation.
+ * Returns pvt LOCKED if the channel still owns this cpvt, otherwise NULL (nothing locked). */
+struct pvt* cpvt_channel_lock(struct ast_channel* const channel, const struct cpvt* const cpvt, struct pvt* const pvt);
+
 void cpvt_call_activate(struct cpvt* const cpvt);
 void cpvt_call_disactivate(struct cpvt* const cpvt);
 

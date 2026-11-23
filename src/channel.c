@@ -38,6 +38,11 @@
 #define ESTRPIPE EPIPE
 #endif
 
+/* RUT360: lock the captured pvt and revalidate the cpvt (see cpvt_channel_lock() in cpvt.c).
+ * varname is NULL if the cpvt was released while waiting: do nothing and return.
+ * Always unlocks the pvt that was locked, never a pvt read again from the cpvt. */
+#define SCOPED_CHANNEL_PVT(varname, chan_, cpvt_, pvt_) RAII_VAR(struct pvt* const, varname, cpvt_channel_lock((chan_), (cpvt_), (pvt_)), pvt_unlock)
+
 static int setvar_helper(const struct pvt* const pvt, struct ast_channel* chan, const char* name, const char* value)
 {
     if (ast_strlen_zero(name) || ast_strlen_zero(value)) {
@@ -287,23 +292,29 @@ static int channel_hangup(struct ast_channel* channel)
 
         SCOPED_MUTEX(pvt_lock, &pvt->lock);
 
-        const int need_hangup  = CPVT_TEST_FLAG(cpvt, CALL_FLAG_NEED_HANGUP) ? 1 : 0;
-        const int hangup_cause = ast_channel_hangupcause(channel);
+        /* RUT360: the device thread may have released this cpvt (call ended by the network) while we
+         * waited for the lock; it clears tech_pvt before cpvt_free(). Do not touch it any more. */
+        if (ast_channel_tech_pvt(channel) == cpvt) {
+            const int need_hangup  = CPVT_TEST_FLAG(cpvt, CALL_FLAG_NEED_HANGUP) ? 1 : 0;
+            const int hangup_cause = ast_channel_hangupcause(channel);
 
-        ast_debug(1, "[%s] Hanging up call - idx:%d cause:%d needed:%d\n", PVT_ID(pvt), cpvt->call_idx, hangup_cause, need_hangup);
+            ast_debug(1, "[%s] Hanging up call - idx:%d cause:%d needed:%d\n", PVT_ID(pvt), cpvt->call_idx, hangup_cause, need_hangup);
 
-        if (need_hangup) {
-            if (at_enqueue_hangup(cpvt, cpvt->call_idx, hangup_cause)) {
-                ast_log(LOG_ERROR, "[%s] Error adding AT+CHUP command to queue, call not terminated!\n", PVT_ID(pvt));
-            } else {
-                CPVT_RESET_FLAG(cpvt, CALL_FLAG_NEED_HANGUP);
+            if (need_hangup) {
+                if (at_enqueue_hangup(cpvt, cpvt->call_idx, hangup_cause)) {
+                    ast_log(LOG_ERROR, "[%s] Error adding AT+CHUP command to queue, call not terminated!\n", PVT_ID(pvt));
+                } else {
+                    CPVT_RESET_FLAG(cpvt, CALL_FLAG_NEED_HANGUP);
+                }
             }
+
+            cpvt_call_disactivate(cpvt);
+
+            /* drop cpvt->channel reference */
+            cpvt->channel = NULL;
+        } else {
+            ast_debug(1, "[%s] Hangup - call already released by the device\n", PVT_ID(pvt));
         }
-
-        cpvt_call_disactivate(cpvt);
-
-        /* drop cpvt->channel reference */
-        cpvt->channel = NULL;
     }
 
     /* drop channel -> cpvt reference */
@@ -329,6 +340,10 @@ static int channel_answer(struct ast_channel* channel)
 
     SCOPED_MUTEX(pvt_lock, &pvt->lock);
 
+    if (ast_channel_tech_pvt(channel) != cpvt) { /* RUT360: call released while waiting for the lock */
+        return -1;
+    }
+
     if (CPVT_DIR_INCOMING(cpvt)) {
         if (at_enqueue_answer(cpvt)) {
             ast_log(LOG_ERROR, "[%s] Error sending answer commands\n", PVT_ID(pvt));
@@ -351,6 +366,10 @@ static int channel_digit_begin(struct ast_channel* channel, char digit)
     struct pvt* const pvt = cpvt->pvt;
 
     SCOPED_MUTEX(pvt_lock, &pvt->lock);
+
+    if (ast_channel_tech_pvt(channel) != cpvt) { /* RUT360: call released while waiting for the lock */
+        return -1;
+    }
 
     const int rv = at_enqueue_dtmf(cpvt, digit);
     if (rv) {
@@ -595,7 +614,10 @@ static struct ast_frame* channel_read(struct ast_channel* channel)
     }
 
     struct pvt* const pvt = cpvt->pvt;
-    SCOPED_CPVT_TL(cpvt_lock, cpvt);
+    SCOPED_CHANNEL_PVT(pvt_locked, channel, cpvt, pvt);
+    if (!pvt_locked) {
+        return &ast_null_frame; /* call released while waiting for the lock */
+    }
 
     ast_debug(8, "[%s] Read - idx:%d state:%s audio_fd:%d\n", PVT_ID(pvt), cpvt->call_idx, call_state2str(cpvt->state), pvt->audio_fd);
 
@@ -811,7 +833,10 @@ static int channel_write(struct ast_channel* channel, struct ast_frame* f)
     }
 
     struct pvt* const pvt = cpvt->pvt;
-    SCOPED_CPVT_TL(cpvt_lock, cpvt);
+    SCOPED_CHANNEL_PVT(pvt_locked, channel, cpvt, pvt);
+    if (!pvt_locked) {
+        return 0; /* call released while waiting for the lock: frame dropped */
+    }
 
     const struct ast_format* const fmt = pvt_get_audio_format(pvt);
     const size_t frame_size            = pvt_get_audio_frame_size(PTIME_PLAYBACK, fmt);
@@ -857,7 +882,8 @@ static int channel_fixup(struct ast_channel* oldchannel, struct ast_channel* new
 
     SCOPED_MUTEX(pvt_lock, &pvt->lock);
 
-    if (cpvt->channel == oldchannel) {
+    /* RUT360: cpvt revalidated under the lock (it may have been released while waiting) */
+    if (ast_channel_tech_pvt(newchannel) == cpvt && cpvt->channel == oldchannel) {
         cpvt->channel = newchannel;
     }
 
@@ -932,7 +958,9 @@ static int channel_indicate(struct ast_channel* channel, int condition, const vo
                 ast_moh_start(channel, data, NULL);
             } else {
                 SCOPED_MUTEX(pvt_lock, &pvt->lock);
-                at_enqueue_mute(cpvt, 1);
+                if (ast_channel_tech_pvt(channel) == cpvt) { /* RUT360: cpvt revalidated under the lock */
+                    at_enqueue_mute(cpvt, 1);
+                }
             }
             break;
 
@@ -941,11 +969,16 @@ static int channel_indicate(struct ast_channel* channel, int condition, const vo
                 ast_moh_stop(channel);
             } else {
                 SCOPED_MUTEX(pvt_lock, &pvt->lock);
-                at_enqueue_mute(cpvt, 0);
+                if (ast_channel_tech_pvt(channel) == cpvt) { /* RUT360: cpvt revalidated under the lock */
+                    at_enqueue_mute(cpvt, 0);
+                }
             }
             break;
 
         case AST_CONTROL_CONNECTED_LINE: {
+            if (!pvt) { /* RUT360: call already released, pvt is NULL: do not lock NULL->lock */
+                break;
+            }
             struct ast_party_connected_line* const cnncd = ast_channel_connected(channel);
             SCOPED_MUTEX(pvt_lock, &pvt->lock);
             ast_log(LOG_NOTICE, "[%s] Connected party is now %s <%s>\n", PVT_ID(pvt), S_COR(cnncd->id.name.valid, cnncd->id.name.str, ""),
@@ -1155,7 +1188,10 @@ static int channel_func_read(struct ast_channel* channel, attribute_unused const
     }
 
     if (!strcasecmp(data, "callstate")) {
-        SCOPED_CPVT_TL(cpvt_lock, cpvt);
+        SCOPED_CHANNEL_PVT(pvt_locked, channel, cpvt, cpvt->pvt);
+        if (!pvt_locked) {
+            return -1;
+        }
         call_state_t state = cpvt->state;
         ast_copy_string(buf, call_state2str(state), len);
     } else {
@@ -1186,7 +1222,10 @@ static int channel_func_write(struct ast_channel* channel, const char* function,
             return -1;
         }
 
-        SCOPED_CPVT_TL(cpvt_lock, cpvt);
+        SCOPED_CHANNEL_PVT(pvt_locked, channel, cpvt, cpvt->pvt);
+        if (!pvt_locked) {
+            return -1;
+        }
         oldstate = cpvt->state;
 
         if (oldstate == newstate)

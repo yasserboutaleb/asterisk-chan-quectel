@@ -263,6 +263,7 @@ static int at_response_ok(struct pvt* const pvt, const at_res_t at_res, const at
 
         case CMD_AT_CVOICE:
             at_ok_response_dbg(1, pvt, ecmd, "Voice calls supported");
+            pvt->voice_init_retries = 0;
 
             switch (CONF_UNIQ(pvt, uac)) {
                 case TRIBOOL_TRUE:
@@ -684,10 +685,24 @@ static int at_response_error(struct pvt* const pvt, const at_res_t at_res, const
 
         case CMD_AT_DSCI_OFF:
             at_err_response_dbg(CONF_SHARED(pvt, dsci) ? 4 : 1, pvt, ecmd, "Error disabling indications");
+            break; /* RUT360: was missing, an error on ^DSCI=0 fell through and disabled voice */
 
         case CMD_AT_CVOICE:
-            at_err_response_dbg(1, pvt, ecmd, "Voice calls not supported");
             pvt->has_voice = 0;
+            /* RUT360: right after a modem reset (CFUN=1,1, RutOS reloading the modem, boot) the AT port
+             * can answer before the voice stack and AT+QPCMV? returns ERROR. The init batch stopped here
+             * (CMD_AT_FINAL never ran) and the device stayed "Not initialized" until Asterisk restarted.
+             * Schedule a device restart instead, picked up by the device manager on its next pass
+             * (interval, 15 s), at most 20 times (about 5 min); reset as soon as AT+QPCMV? answers. */
+            if (pvt->voice_init_retries < 20u) {
+                pvt->voice_init_retries++;
+                ast_log(LOG_WARNING, "[%s] AT+QPCMV? refused during init (modem not ready?) - device restart scheduled (%u/20)\n", PVT_ID(pvt),
+                        pvt->voice_init_retries);
+                pvt->desired_state = DEV_STATE_RESTARTED;
+                pvt->restart_time  = RESTATE_TIME_NOW;
+            } else {
+                at_err_response_dbg(1, pvt, ecmd, "Voice calls not supported");
+            }
             break;
 
         case CMD_AT_CPCMREG:
