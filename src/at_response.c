@@ -1191,6 +1191,8 @@ static int at_response_clcc(struct pvt* const pvt, const struct ast_str* const r
  * an outgoing call that never appeared (CALL_STATE_INIT without index) is released
  * after 5 polls. ALIVE flags are cleared afterwards for the next poll.
  */
+static void clcc_poll_orphan(struct pvt* const pvt, struct cpvt* const cpvt);
+
 static void clcc_poll_sweep(struct pvt* const pvt)
 {
     struct cpvt* cpvt;
@@ -1212,6 +1214,9 @@ static void clcc_poll_sweep(struct pvt* const pvt)
         AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
             if (CPVT_TEST_FLAG(cpvt, CALL_FLAG_ALIVE) || cpvt->state == CALL_STATE_RELEASED) {
                 cpvt->clcc_miss = 0u;
+                if (CPVT_TEST_FLAG(cpvt, CALL_FLAG_ALIVE) && !cpvt->channel && cpvt->state != CALL_STATE_RELEASED) {
+                    clcc_poll_orphan(pvt, cpvt);
+                }
                 continue;
             }
 
@@ -1241,6 +1246,41 @@ static void clcc_poll_sweep(struct pvt* const pvt)
 
     AST_LIST_TRAVERSE(&pvt->chans, cpvt, entry) {
         CPVT_RESET_FLAG(cpvt, CALL_FLAG_ALIVE);
+    }
+}
+
+/*
+ * a call still listed by AT+CLCC although its Asterisk channel is gone means the
+ * modem refused the hangup (AT+QHUP answered ERROR, seen in production during the LTE -> 3G
+ * fallback of a call being set up). Without this, the call goes on in the modem (the called
+ * phone keeps ringing) and the device refuses new calls until the network ends it.
+ * Hang up again a few polls apart, falling back to AT+CHUP (see at_enqueue_hangup_retry).
+ * The first new hangup waits 3 polls, so a normal release in progress is not disturbed.
+ */
+static void clcc_poll_orphan(struct pvt* const pvt, struct cpvt* const cpvt)
+{
+    static const unsigned int FIRST = 3u;  /* polls before the first new hangup */
+    static const unsigned int EVERY = 3u;  /* polls between two new hangups */
+    static const unsigned int LIMIT = 20u; /* new hangups before giving up */
+
+    const unsigned int polls = ++cpvt->orphan_polls;
+
+    if (polls < FIRST || (polls - FIRST) % EVERY) {
+        return;
+    }
+
+    const unsigned int attempt = (polls - FIRST) / EVERY + 1u;
+
+    if (attempt > LIMIT) {
+        if (attempt == LIMIT + 1u) {
+            ast_log(LOG_ERROR, "[%s] CLCC poll - call idx:%d still listed after %u new hangups, giving up\n", PVT_ID(pvt), cpvt->call_idx, LIMIT);
+        }
+        return;
+    }
+
+    ast_log(LOG_WARNING, "[%s] CLCC poll - call idx:%d still listed after hangup, hanging up again (%u)\n", PVT_ID(pvt), cpvt->call_idx, attempt);
+    if (at_enqueue_hangup_retry(cpvt, attempt)) {
+        ast_log(LOG_ERROR, "[%s] Unable to queue hangup for call idx:%d\n", PVT_ID(pvt), cpvt->call_idx);
     }
 }
 

@@ -1406,6 +1406,29 @@ int at_enqueue_hangup(struct cpvt* cpvt, int call_idx, int release_cause)
 }
 
 /*!
+ * \brief hang up again a call the modem still lists after its channel was hung up
+ * \param cpvt -- the orphaned call
+ * \param attempt -- 1 for the first new hangup
+ * \return 0 on success
+ *
+ * The EG06 may answer ERROR to AT+QHUP, for example when a call being set up falls back
+ * from LTE to 3G (network without VoLTE). The call then goes on in the modem, and the device
+ * refuses new calls until the network ends it. Odd attempts use AT+CHUP when this call is
+ * the only one known (AT+CHUP releases every voice call, never the data connection); the
+ * others repeat AT+QHUP with the call index.
+ */
+int at_enqueue_hangup_retry(struct cpvt* const cpvt, const unsigned int attempt)
+{
+    struct pvt* const pvt = cpvt->pvt;
+
+    if (pvt->is_simcom || !CONF_SHARED(pvt, qhup) || ((attempt & 1u) && PVT_STATE(pvt, chansno) == 1u)) {
+        return at_enqueue_chup(cpvt);
+    }
+
+    return at_enqueue_qhup(cpvt, cpvt->call_idx, AST_CAUSE_NORMAL_CLEARING);
+}
+
+/*!
  * \brief Enqueue AT+CLVL commands for volume synchronization
  * \param cpvt -- cpvt structure
  * \return 0 on success

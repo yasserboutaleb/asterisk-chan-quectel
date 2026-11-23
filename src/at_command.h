@@ -157,6 +157,7 @@ int at_enqueue_cmgd(struct cpvt* cpvt, unsigned int index, int delflag);
 int at_enqueue_delete_sms(struct cpvt* cpvt, int idx, tristate_bool_t ack);
 int at_enqueue_delete_sms_n(struct cpvt* cpvt, int idx, tristate_bool_t ack);
 int at_enqueue_hangup(struct cpvt* cpvt, int call_idx, int release_cause);
+int at_enqueue_hangup_retry(struct cpvt* cpvt, unsigned int attempt);
 int at_enqueue_volsync(struct cpvt* cpvt);
 int at_enqueue_clcc(struct cpvt* cpvt);
 int at_enqueue_activate(struct cpvt* cpvt);
